@@ -6,6 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
-  status: string;
+export interface BuilderPayment {
+  id: number;
+  paymentId: string;
+  staffId: string;
+  ign: string;
+  amount: string;
+  timestamp: string;
 }
