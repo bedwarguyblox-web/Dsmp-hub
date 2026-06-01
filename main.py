@@ -3,6 +3,9 @@ main.py — Discord bot entry point.
 
 Loads all cogs, initialises the database, starts the scheduler,
 and syncs slash commands globally on startup.
+
+Also runs a lightweight HTTP health-check server on PORT (default 8080)
+so hosting platforms (Railway, Fly.io, Replit) can verify the bot is alive.
 """
 
 import asyncio
@@ -11,6 +14,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from aiohttp import web
 
 import discord
 from discord.ext import commands
@@ -155,8 +159,40 @@ class StaffBot(commands.Bot):
             pass
 
 
+# ── Keep-alive HTTP server ────────────────────────────────────────────────────
+async def start_health_server():
+    """
+    Tiny aiohttp web server so hosting platforms can confirm the bot is alive.
+    GET /        → 200 "Bot is running"
+    GET /health  → 200 JSON status
+    UptimeRobot / Railway / Fly.io all just need any 200 response.
+    """
+    async def index(request):
+        return web.Response(text="✅ Bot is running.")
+
+    async def health(request):
+        return web.json_response({
+            "status": "ok",
+            "bot": "online",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    app = web.Application()
+    app.router.add_get("/",       index)
+    app.router.add_get("/health", health)
+
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Health-check server listening on port %d", port)
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 async def main():
+    # Start HTTP health server and Discord bot concurrently
+    await start_health_server()
     bot = StaffBot()
     async with bot:
         await bot.start(BOT_TOKEN)
