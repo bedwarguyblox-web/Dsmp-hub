@@ -20,6 +20,13 @@ ROLE_HIERARCHY: list[str] = [
     "Jr Helper",
     "Helper",
     "Sr Helper",
+    "Trial Ticket Helper",
+    "Jr Ticket Helper",
+    "Ticket Helper",
+    "Sr Ticket Helper",
+    "Jr Ticket Admin",
+    "Ticket Admin",
+    "Sr Ticket Admin",
     "Jr Moderator",
     "Moderator",
     "Sr Moderator",
@@ -29,16 +36,14 @@ ROLE_HIERARCHY: list[str] = [
     "Partnership Manager",
     "Sr Partnership Manager",
     "Head Partnership Manager",
-    "Jr Ticket Helper",
-    "Ticket Helper",
-    "Sr Ticket Helper",
-    "Jr Ticket Admin",
-    "Ticket Admin",
-    "Sr Ticket Admin",
     "Staff Manager",
     "Jr Admin",
     "Admin",
+    "Sr Admin",
     "Head Admin",
+    "Server Manager",
+    "Founding Titan",
+    "Founder",
 ]
 
 # Numeric rank — higher is more powerful
@@ -321,6 +326,20 @@ ROLE_PERMISSION_TEMPLATES: dict[str, discord.Permissions] = {
         view_audit_log=True,
     ),
     "Head Admin": discord.Permissions(administrator=True),
+    # ── Your server's extra roles ───────────────────────────────────────────
+    "Trial Ticket Helper": discord.Permissions(
+        read_messages=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        add_reactions=True,
+        use_application_commands=True,
+    ),
+    "Sr Admin": discord.Permissions(administrator=True),
+    "Server Manager": discord.Permissions(administrator=True),
+    "Founding Titan": discord.Permissions(administrator=True),
+    "Founder": discord.Permissions(administrator=True),
 }
 
 
