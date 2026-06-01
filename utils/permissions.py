@@ -16,52 +16,38 @@ with open(_CONFIG_PATH) as _f:
     CONFIG = json.load(_f)
 
 # ── Staff role hierarchy (lower index = lower rank) ─────────────────────────
+# Only roles that actually exist in your server are listed here.
 ROLE_HIERARCHY: list[str] = [
-    "Jr Helper",
-    "Helper",
-    "Sr Helper",
-    "Trial Ticket Helper",
-    "Jr Ticket Helper",
-    "Ticket Helper",
-    "Sr Ticket Helper",
-    "Jr Ticket Admin",
-    "Ticket Admin",
-    "Sr Ticket Admin",
-    "Jr Moderator",
-    "Moderator",
-    "Sr Moderator",
-    "Head Moderator",
-    "Trial Partnership Manager",
-    "Jr Partnership Manager",
-    "Partnership Manager",
-    "Sr Partnership Manager",
-    "Head Partnership Manager",
-    "Staff Manager",
-    "Jr Admin",
-    "Admin",
-    "Sr Admin",
-    "Head Admin",
-    "Server Manager",
-    "Founding Titan",
-    "Founder",
+    "Helper",                   # rank 0  — lowest staff
+    "Sr Helper",                # rank 1
+    "Trial Ticket Helper",      # rank 2
+    "Jr Ticket Helper",         # rank 3
+    "Ticket Helper",            # rank 4
+    "Sr Ticket Helper",         # rank 5
+    "Ticket Admin",             # rank 6
+    "Jr Moderator",             # rank 7
+    "Moderator",                # rank 8
+    "Sr Moderator",             # rank 9
+    "Head Moderator",           # rank 10
+    "Jr Partnership Manager",   # rank 11
+    "Partnership Manager",      # rank 12
+    "Sr Partnership Manager",   # rank 13
+    "Head Partnership Manager", # rank 14
+    "Staff Manager",            # rank 15
+    "Admin",                    # rank 16
+    "Sr Admin",                 # rank 17
+    "Server Manager",           # rank 18
+    "Founding Titan",           # rank 19
+    "Founder",                  # rank 20  — highest staff
 ]
 
-# Numeric rank — higher is more powerful
+# Numeric rank — higher number = more powerful
 ROLE_RANK: dict[str, int] = {name: i for i, name in enumerate(ROLE_HIERARCHY)}
 
 
 # ── Discord permission templates per staff role ─────────────────────────────
-# Only permissions that differ from the default @everyone baseline are listed.
+# These are applied by /serverify to sync role permissions to the standard.
 ROLE_PERMISSION_TEMPLATES: dict[str, discord.Permissions] = {
-    "Jr Helper": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-    ),
     "Helper": discord.Permissions(
         read_messages=True,
         send_messages=True,
@@ -82,6 +68,62 @@ ROLE_PERMISSION_TEMPLATES: dict[str, discord.Permissions] = {
         use_application_commands=True,
         manage_messages=True,
         mute_members=True,
+    ),
+    "Trial Ticket Helper": discord.Permissions(
+        read_messages=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        add_reactions=True,
+        use_application_commands=True,
+    ),
+    "Jr Ticket Helper": discord.Permissions(
+        read_messages=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        add_reactions=True,
+        use_application_commands=True,
+        manage_messages=True,
+    ),
+    "Ticket Helper": discord.Permissions(
+        read_messages=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        add_reactions=True,
+        use_application_commands=True,
+        manage_messages=True,
+        manage_threads=True,
+    ),
+    "Sr Ticket Helper": discord.Permissions(
+        read_messages=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        add_reactions=True,
+        use_application_commands=True,
+        manage_messages=True,
+        manage_threads=True,
+        kick_members=True,
+    ),
+    "Ticket Admin": discord.Permissions(
+        read_messages=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        add_reactions=True,
+        use_application_commands=True,
+        manage_messages=True,
+        manage_threads=True,
+        kick_members=True,
+        ban_members=True,
+        manage_channels=True,
     ),
     "Jr Moderator": discord.Permissions(
         read_messages=True,
@@ -141,16 +183,6 @@ ROLE_PERMISSION_TEMPLATES: dict[str, discord.Permissions] = {
         manage_nicknames=True,
         manage_channels=True,
     ),
-    "Trial Partnership Manager": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-    ),
     "Jr Partnership Manager": discord.Permissions(
         read_messages=True,
         send_messages=True,
@@ -199,81 +231,6 @@ ROLE_PERMISSION_TEMPLATES: dict[str, discord.Permissions] = {
         mention_everyone=True,
         manage_channels=True,
     ),
-    "Jr Ticket Helper": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-    ),
-    "Ticket Helper": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-        manage_threads=True,
-    ),
-    "Sr Ticket Helper": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-        manage_threads=True,
-        kick_members=True,
-    ),
-    "Jr Ticket Admin": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-        manage_threads=True,
-        kick_members=True,
-        ban_members=True,
-    ),
-    "Ticket Admin": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-        manage_threads=True,
-        kick_members=True,
-        ban_members=True,
-        manage_channels=True,
-    ),
-    "Sr Ticket Admin": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-        manage_threads=True,
-        kick_members=True,
-        ban_members=True,
-        manage_channels=True,
-        manage_nicknames=True,
-    ),
     "Staff Manager": discord.Permissions(
         read_messages=True,
         send_messages=True,
@@ -289,23 +246,6 @@ ROLE_PERMISSION_TEMPLATES: dict[str, discord.Permissions] = {
         manage_channels=True,
         manage_nicknames=True,
         manage_roles=True,
-    ),
-    "Jr Admin": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-        manage_messages=True,
-        manage_threads=True,
-        kick_members=True,
-        ban_members=True,
-        manage_channels=True,
-        manage_nicknames=True,
-        manage_roles=True,
-        manage_guild=True,
     ),
     "Admin": discord.Permissions(
         read_messages=True,
@@ -325,21 +265,10 @@ ROLE_PERMISSION_TEMPLATES: dict[str, discord.Permissions] = {
         manage_guild=True,
         view_audit_log=True,
     ),
-    "Head Admin": discord.Permissions(administrator=True),
-    # ── Your server's extra roles ───────────────────────────────────────────
-    "Trial Ticket Helper": discord.Permissions(
-        read_messages=True,
-        send_messages=True,
-        embed_links=True,
-        attach_files=True,
-        read_message_history=True,
-        add_reactions=True,
-        use_application_commands=True,
-    ),
-    "Sr Admin": discord.Permissions(administrator=True),
-    "Server Manager": discord.Permissions(administrator=True),
-    "Founding Titan": discord.Permissions(administrator=True),
-    "Founder": discord.Permissions(administrator=True),
+    "Sr Admin":        discord.Permissions(administrator=True),
+    "Server Manager":  discord.Permissions(administrator=True),
+    "Founding Titan":  discord.Permissions(administrator=True),
+    "Founder":         discord.Permissions(administrator=True),
 }
 
 
