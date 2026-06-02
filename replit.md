@@ -1,36 +1,78 @@
-# [Project name]
+# Staff Bot Dashboard
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Discord staff management bot with a web dashboard. The bot handles strikes, vouches, builder protection timers, and staff hierarchy — with live stats visible in the dashboard.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- **Discord Bot** — workflow runs automatically (`PORT=5000 python3 main.py`)
+- **API Server** — workflow runs automatically (port 8080, routes under `/api`)
+- **Dashboard** — workflow runs automatically (port 23183, preview at `/`)
+- `pnpm --filter @workspace/api-server run typecheck` — typecheck API server
+- `pnpm --filter @workspace/dashboard run typecheck` — typecheck dashboard
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks from OpenAPI spec
+
+## Invite the Bot
+
+**Bot invite link (already has all required permissions):**
+
+```
+https://discord.com/oauth2/authorize?client_id=1463178163331797147&scope=bot+applications.commands&permissions=268651536
+```
+
+Permissions granted: View Channels, Send Messages, Embed Links, Read Message History, Mention Everyone, Manage Roles, Manage Channels.
+
+**After inviting:**
+1. Right-click the bot in your server → "Grant Administrator" OR ensure the permissions above are correct
+2. The bot will auto-sync all slash commands on startup (may take up to 1 hour to appear globally)
+3. To force-sync immediately: DM or mention the bot — slash commands appear in your server's command list
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- **Bot**: Python 3, discord.py 2.x, aiohttp, apscheduler, SQLite (data/database.db)
+- **API Server**: Express 5, TypeScript, better-sqlite3 (reads bot's SQLite directly)
+- **Dashboard**: React + Vite, Tailwind CSS v4, React Query, Wouter
+- **Monorepo**: pnpm workspaces, Node.js 24, TypeScript 5.9
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+```
+main.py                  — Bot entry point, health server on PORT=5000
+config.json              — Bot token, server IDs, role IDs
+cogs/
+  staff.py               — /staffinfo, /promote, /demote
+  strikes.py             — /strike, /removestrike, /checkstrikes
+  vouches.py             — /vouch, /scamvouch, /checkvouches
+  builder.py             — /buildercase, /startbuildertimer, /completebuildertimer
+  serverify.py           — /serverify (role permission scanner)
+utils/
+  database.py            — SQLite schema + all query helpers
+  permissions.py         — Role hierarchy + permission templates
+  scheduler.py           — Weekly strike reset + builder timer expiry
+data/
+  database.db            — Live SQLite database (created on first bot run)
+artifacts/api-server/    — Express API reading data/database.db via better-sqlite3
+artifacts/dashboard/     — React dashboard (5 pages: Overview, Vouches, Strikes, Builder, Activity)
+lib/api-spec/openapi.yaml — Single source of truth for API contract
+```
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Bot uses SQLite (not Postgres) for simplicity and zero-dependency hosting
+- API server reads the same SQLite file directly (readonly) — no separate DB sync needed
+- All slash commands are global (not guild-only) — slower first sync, no per-server re-invite needed
+- Bot token lives in config.json (not env var) — change to env var before open-sourcing
+- Dashboard auto-refreshes every 30s via React Query's refetchInterval
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Staff can use slash commands in Discord to:
+- **Strikes**: Add/remove strikes on members, view history, weekly auto-reset
+- **Vouches**: Log vouches and scam-vouches for community trust scoring
+- **Builder**: Open protection timer cases (48h), auto-ping owner on expiry
+- **Staff Info**: View any member's rank and permissions in the hierarchy
+- **Serverify**: Audit and fix role permission overwrites across the server
+
+The web dashboard shows all this data in read-only tables, leaderboards, and activity feeds.
 
 ## User preferences
 
@@ -38,8 +80,13 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Bot must be **running** before the API server returns real data (it creates the SQLite DB on first start)
+- Slash commands take up to **1 hour** to appear globally after first sync — this is a Discord limitation
+- `better-sqlite3` requires the `onlyBuiltDependencies` entry in `pnpm-workspace.yaml` to build its native module
+- The bot's PORT=5000 health server and the API server's PORT=8080 must not conflict
+- Weekly strike reset fires every Monday 08:00 UTC+8 — driven by `utils/scheduler.py`
 
 ## Pointers
 
 - See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- OpenAPI spec → `lib/api-spec/openapi.yaml`; run `pnpm --filter @workspace/api-spec run codegen` after any change
