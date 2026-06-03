@@ -1,8 +1,10 @@
 """
 partnerships.py — /partnership log, /partnership stats, /partnership leaderboard
-Tracks how many partnerships each staff member has completed.
+Also auto-tracks partnerships by watching the configured partnership channel
+for Discord invite links — each unique invite in a message = 1 partnership.
 """
 
+import re
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -19,9 +21,15 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
+# Matches discord.gg/CODE, discord.com/invite/CODE, discordapp.com/invite/CODE
+INVITE_RE = re.compile(
+    r'discord(?:\.gg|(?:app)?\.com/invite)/([a-zA-Z0-9-]+)',
+    re.IGNORECASE
+)
+
 
 class PartnershipsCog(commands.Cog, name="Partnerships"):
-    """Partnership tracking commands."""
+    """Partnership tracking commands + auto-detection from channel."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -31,10 +39,67 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
         description="Partnership tracking commands"
     )
 
+    # ── Auto-track: watch partnership channel for invite links ───────────────
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Skip bots and DMs
+        if message.author.bot or not message.guild:
+            return
+
+        channel_id = CONFIG.get("PARTNERSHIP_CHANNEL_ID")
+        if not channel_id or message.channel.id != channel_id:
+            return
+
+        # Find all unique invite codes in the message
+        codes = list(dict.fromkeys(INVITE_RE.findall(message.content)))
+        if not codes:
+            return
+
+        guild    = message.guild
+        staff_id = message.author.id
+        logged   = 0
+
+        for code in codes:
+            partner_name = f"discord.gg/{code}"
+            log_partnership(
+                staff_id, guild.id,
+                partner_name=partner_name,
+                notes=f"Auto-detected in #{message.channel.name}",
+                invite_code=code,
+            )
+            log_staff_action(
+                "partnership_auto", staff_id, guild.id,
+                details=f"Invite: {code} | Channel: {message.channel.id}"
+            )
+            logged += 1
+
+        if logged:
+            try:
+                await message.add_reaction("🤝")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+            total = get_partnership_count(staff_id, guild.id)
+            logger.info(
+                "Auto-logged %d partnership(s) for %s (%s) — total now %d",
+                logged, message.author, staff_id, total
+            )
+
+            await self._send_to_logs(guild, discord.Embed(
+                title="🤝 Partnership Auto-Logged",
+                description=(
+                    f"**Staff:** {message.author.mention}\n"
+                    f"**Invite(s):** {', '.join(f'discord.gg/{c}' for c in codes)}\n"
+                    f"**Their Total:** {total}"
+                ),
+                color=discord.Color.green(),
+                timestamp=datetime.now(timezone.utc),
+            ))
+
     # ── /partnership log ─────────────────────────────────────────────────────
     @partnership_group.command(
         name="log",
-        description="Log a completed partnership"
+        description="Manually log a completed partnership"
     )
     @app_commands.describe(
         partner_name="Name of the server or person you partnered with",
@@ -75,9 +140,9 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
             timestamp=datetime.now(timezone.utc),
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.add_field(name="Logged By",      value=interaction.user.mention, inline=True)
-        embed.add_field(name="Partner",        value=partner_name,             inline=True)
-        embed.add_field(name="Your Total",     value=str(total),               inline=True)
+        embed.add_field(name="Logged By",  value=interaction.user.mention, inline=True)
+        embed.add_field(name="Partner",    value=partner_name,             inline=True)
+        embed.add_field(name="Your Total", value=str(total),               inline=True)
         if notes:
             embed.add_field(name="Notes", value=notes, inline=False)
         embed.set_footer(text=f"Staff ID: {interaction.user.id}")
@@ -113,8 +178,8 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
         target = user or interaction.user
         guild  = interaction.guild
 
-        total   = get_partnership_count(target.id, guild.id)
-        recent  = get_recent_partnerships(target.id, guild.id, 5)
+        total  = get_partnership_count(target.id, guild.id)
+        recent = get_recent_partnerships(target.id, guild.id, 5)
 
         embed = discord.Embed(
             title=f"🤝 Partnership Stats — {target.display_name}",
@@ -122,15 +187,17 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
             timestamp=datetime.now(timezone.utc),
         )
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.add_field(name="Staff Member",    value=target.mention, inline=True)
-        embed.add_field(name="Total Partnerships", value=str(total), inline=True)
+        embed.add_field(name="Staff Member",       value=target.mention, inline=True)
+        embed.add_field(name="Total Partnerships", value=str(total),     inline=True)
 
         if recent:
             lines = []
             for p in recent:
                 ts    = str(p["timestamp"])[:10]
                 notes = f" — {p['notes'][:50]}" if p["notes"] else ""
-                lines.append(f"• **{p['partner_name']}** on {ts}{notes}")
+                # Show invite code badge if auto-tracked
+                badge = " 🔗" if p["invite_code"] else ""
+                lines.append(f"• **{p['partner_name']}**{badge} on {ts}{notes}")
             embed.add_field(
                 name=f"Recent (last {len(recent)})",
                 value="\n".join(lines),
@@ -139,7 +206,7 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
         else:
             embed.add_field(name="Recent", value="No partnerships logged yet.", inline=False)
 
-        embed.set_footer(text=f"User ID: {target.id}")
+        embed.set_footer(text=f"User ID: {target.id} • 🔗 = auto-tracked from channel")
         await interaction.followup.send(embed=embed)
 
     # ── /partnership leaderboard ─────────────────────────────────────────────
@@ -173,7 +240,7 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
         )
 
         if not rows:
-            embed.description = "No partnerships have been logged yet.\nUse `/partnership log` to get started."
+            embed.description = "No partnerships have been logged yet.\nPost an invite link in the partnership channel to get started."
         else:
             medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
             lines  = []

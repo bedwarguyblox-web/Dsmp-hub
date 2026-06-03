@@ -483,18 +483,25 @@ def _ensure_partnerships_table(conn):
             guild_id     INTEGER NOT NULL,
             partner_name TEXT    NOT NULL,
             notes        TEXT,
+            invite_code  TEXT,
             timestamp    TEXT    NOT NULL DEFAULT (datetime('now'))
         )
     """)
+    # Migrate existing tables that predate invite_code column
+    try:
+        conn.execute("ALTER TABLE partnerships ADD COLUMN invite_code TEXT")
+    except Exception:
+        pass  # column already exists
 
 
-def log_partnership(staff_id: int, guild_id: int, partner_name: str, notes: str = None):
+def log_partnership(staff_id: int, guild_id: int, partner_name: str,
+                    notes: str = None, invite_code: str = None):
     with get_connection() as conn:
         _ensure_partnerships_table(conn)
         conn.execute("""
-            INSERT INTO partnerships (staff_id, guild_id, partner_name, notes)
-            VALUES (?, ?, ?, ?)
-        """, (staff_id, guild_id, partner_name, notes))
+            INSERT INTO partnerships (staff_id, guild_id, partner_name, notes, invite_code)
+            VALUES (?, ?, ?, ?, ?)
+        """, (staff_id, guild_id, partner_name, notes, invite_code))
         conn.commit()
 
 

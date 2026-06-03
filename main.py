@@ -43,8 +43,8 @@ if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
 
 # ── Bot intents ──────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
-intents.members      = True   # Required for member lookups and role management
-intents.message_content = False  # Not needed for slash-command-only bot
+intents.members         = True  # Required for member lookups and role management
+intents.message_content = True  # Required to read message text for partnership auto-tracking
 
 # ── Bot class ────────────────────────────────────────────────────────────────
 class StaffBot(commands.Bot):
@@ -207,12 +207,13 @@ if __name__ == "__main__":
         logger.critical(
             "\n"
             "═══════════════════════════════════════════════════════════════\n"
-            " SETUP REQUIRED — Server Members Intent not enabled\n"
+            " SETUP REQUIRED — Privileged intents not enabled\n"
             "═══════════════════════════════════════════════════════════════\n"
             " 1. Go to https://discord.com/developers/applications/\n"
             " 2. Select your application → Bot\n"
-            " 3. Under 'Privileged Gateway Intents' enable:\n"
+            " 3. Under 'Privileged Gateway Intents' enable ALL of:\n"
             "      ✓  SERVER MEMBERS INTENT\n"
+            "      ✓  MESSAGE CONTENT INTENT\n"
             " 4. Save changes and restart the bot\n"
             "═══════════════════════════════════════════════════════════════\n"
         )
