@@ -404,3 +404,132 @@ def log_staff_action(action_type: str, actor_id: int, guild_id: int,
             VALUES (?, ?, ?, ?, ?)
         """, (action_type, actor_id, target_id, details, guild_id))
         conn.commit()
+
+
+# ── Bot permission grants ────────────────────────────────────────────────────
+
+def _ensure_bot_perms_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bot_perms (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type  TEXT    NOT NULL,
+            target_id    INTEGER NOT NULL,
+            guild_id     INTEGER NOT NULL,
+            command_name TEXT    NOT NULL,
+            granted_by   INTEGER NOT NULL,
+            granted_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(target_type, target_id, guild_id, command_name)
+        )
+    """)
+
+
+def has_perm_grant(target_type: str, target_id: int, guild_id: int, command_name: str) -> bool:
+    """Return True if target_type/target_id has a grant for command_name (or 'all') in guild."""
+    with get_connection() as conn:
+        _ensure_bot_perms_table(conn)
+        row = conn.execute("""
+            SELECT 1 FROM bot_perms
+            WHERE target_type=? AND target_id=? AND guild_id=?
+              AND (command_name=? OR command_name='all')
+        """, (target_type, target_id, guild_id, command_name)).fetchone()
+    return row is not None
+
+
+def add_perm_grant(target_type: str, target_id: int, guild_id: int,
+                   command_name: str, granted_by: int) -> bool:
+    """Insert a grant. Returns True if new, False if already existed."""
+    try:
+        with get_connection() as conn:
+            _ensure_bot_perms_table(conn)
+            conn.execute("""
+                INSERT INTO bot_perms (target_type, target_id, guild_id, command_name, granted_by)
+                VALUES (?, ?, ?, ?, ?)
+            """, (target_type, target_id, guild_id, command_name, granted_by))
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def remove_perm_grant(target_type: str, target_id: int, guild_id: int,
+                      command_name: str) -> bool:
+    """Delete a specific grant. Returns True if something was deleted."""
+    with get_connection() as conn:
+        _ensure_bot_perms_table(conn)
+        cur = conn.execute("""
+            DELETE FROM bot_perms
+            WHERE target_type=? AND target_id=? AND guild_id=? AND command_name=?
+        """, (target_type, target_id, guild_id, command_name))
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def list_perm_grants(guild_id: int):
+    """Return all grants for a guild, newest first."""
+    with get_connection() as conn:
+        _ensure_bot_perms_table(conn)
+        return conn.execute("""
+            SELECT * FROM bot_perms WHERE guild_id=? ORDER BY granted_at DESC
+        """, (guild_id,)).fetchall()
+
+
+# ── Partnership tracker ──────────────────────────────────────────────────────
+
+def _ensure_partnerships_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS partnerships (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            staff_id     INTEGER NOT NULL,
+            guild_id     INTEGER NOT NULL,
+            partner_name TEXT    NOT NULL,
+            notes        TEXT,
+            timestamp    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+
+def log_partnership(staff_id: int, guild_id: int, partner_name: str, notes: str = None):
+    with get_connection() as conn:
+        _ensure_partnerships_table(conn)
+        conn.execute("""
+            INSERT INTO partnerships (staff_id, guild_id, partner_name, notes)
+            VALUES (?, ?, ?, ?)
+        """, (staff_id, guild_id, partner_name, notes))
+        conn.commit()
+
+
+def get_partnership_count(staff_id: int, guild_id: int) -> int:
+    with get_connection() as conn:
+        _ensure_partnerships_table(conn)
+        row = conn.execute("""
+            SELECT COUNT(*) as c FROM partnerships WHERE staff_id=? AND guild_id=?
+        """, (staff_id, guild_id)).fetchone()
+    return row["c"] if row else 0
+
+
+def get_recent_partnerships(staff_id: int, guild_id: int, limit: int = 5):
+    with get_connection() as conn:
+        _ensure_partnerships_table(conn)
+        return conn.execute("""
+            SELECT * FROM partnerships WHERE staff_id=? AND guild_id=?
+            ORDER BY timestamp DESC LIMIT ?
+        """, (staff_id, guild_id, limit)).fetchall()
+
+
+def get_partnership_leaderboard(guild_id: int, limit: int = 10):
+    with get_connection() as conn:
+        _ensure_partnerships_table(conn)
+        return conn.execute("""
+            SELECT staff_id, COUNT(*) as total
+            FROM partnerships WHERE guild_id=?
+            GROUP BY staff_id ORDER BY total DESC LIMIT ?
+        """, (guild_id, limit)).fetchall()
+
+
+def get_total_partnerships(guild_id: int) -> int:
+    with get_connection() as conn:
+        _ensure_partnerships_table(conn)
+        row = conn.execute(
+            "SELECT COUNT(*) as c FROM partnerships WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+    return row["c"] if row else 0

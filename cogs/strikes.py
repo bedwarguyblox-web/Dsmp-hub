@@ -9,7 +9,7 @@ from discord.ext import commands
 import logging
 from datetime import datetime, timezone
 
-from utils.permissions import is_at_least, CONFIG
+from utils.permissions import is_authorized, CONFIG
 from utils.database import (
     add_strike, remove_strike, get_strike_count,
     get_strike_history, log_staff_action
@@ -42,11 +42,10 @@ class StrikesCog(commands.Cog, name="Strikes"):
     ):
         await interaction.response.defer()
 
-        # Permission: Moderator or above
-        if not is_at_least(interaction.user, "Moderator"):
+        if not is_authorized(interaction.user, interaction.guild, "strike"):
             embed = discord.Embed(
                 title="❌ Permission Denied",
-                description="You must be **Moderator** or above to issue strikes.",
+                description="You must be **Admin** or above to issue strikes.",
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc),
             )
@@ -117,11 +116,10 @@ class StrikesCog(commands.Cog, name="Strikes"):
     ):
         await interaction.response.defer()
 
-        # Permission: Sr Moderator or above
-        if not is_at_least(interaction.user, "Sr Moderator"):
+        if not is_authorized(interaction.user, interaction.guild, "removestrike"):
             embed = discord.Embed(
                 title="❌ Permission Denied",
-                description="You must be **Sr Moderator** or above to remove strikes.",
+                description="You must be **Admin** or above to remove strikes.",
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc),
             )
@@ -169,6 +167,18 @@ class StrikesCog(commands.Cog, name="Strikes"):
         user: discord.Member
     ):
         await interaction.response.defer()
+
+        if not is_authorized(interaction.user, interaction.guild, "checkstrikes"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to check strike records.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
 
         guild = interaction.guild
         count   = get_strike_count(user.id, guild.id)

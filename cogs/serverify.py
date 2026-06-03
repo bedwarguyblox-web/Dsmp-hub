@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 
 from utils.permissions import (
-    is_at_least, ROLE_PERMISSION_TEMPLATES, CONFIG
+    is_authorized, ROLE_PERMISSION_TEMPLATES, CONFIG
 )
 from utils.database import log_staff_action
 
@@ -53,11 +53,10 @@ class ServerifyCog(commands.Cog, name="Serverify"):
     async def serverify(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
 
-        # Permission: Staff Manager or above
-        if not is_at_least(interaction.user, "Staff Manager"):
+        if not is_authorized(interaction.user, interaction.guild, "serverify"):
             embed = discord.Embed(
                 title="❌ Permission Denied",
-                description="You must be **Staff Manager** or above to use `/serverify`.",
+                description="You must be **Admin** or above to use `/serverify`.",
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc),
             )

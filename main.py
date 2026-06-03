@@ -70,6 +70,8 @@ class StaffBot(commands.Bot):
             "cogs.vouches",
             "cogs.builder",
             "cogs.serverify",
+            "cogs.perms",
+            "cogs.partnerships",
         ]
         for module in cog_modules:
             try:

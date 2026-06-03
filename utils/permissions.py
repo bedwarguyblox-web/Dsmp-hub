@@ -306,6 +306,26 @@ def is_owner(member: discord.Member) -> bool:
     return member.id == CONFIG.get("OWNER_ID")
 
 
+def is_authorized(member: discord.Member, guild: discord.Guild, command_name: str) -> bool:
+    """
+    Return True if member is allowed to use the given command.
+    Access is granted when ANY of the following is true:
+      1. Member is the bot owner.
+      2. Member has been granted access (user-level) for this command or 'all'.
+      3. A role the member holds has been granted access for this command or 'all'.
+      4. Member's staff rank is Admin (16) or above.
+    """
+    if is_owner(member):
+        return True
+    from utils.database import has_perm_grant
+    if has_perm_grant("user", member.id, guild.id, command_name):
+        return True
+    for role in member.roles:
+        if has_perm_grant("role", role.id, guild.id, command_name):
+            return True
+    return is_at_least(member, "Admin")
+
+
 def can_manage_roles(actor: discord.Member, target: discord.Member) -> bool:
     """
     Return True if actor's top role is higher than target's top role

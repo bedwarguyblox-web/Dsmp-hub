@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 import json, os
 
-from utils.permissions import is_at_least, can_manage_specific_role, CONFIG
+from utils.permissions import is_at_least, is_authorized, can_manage_specific_role, CONFIG
 from utils.database import log_staff_action
 
 logger = logging.getLogger(__name__)
@@ -73,11 +73,10 @@ class StaffCog(commands.Cog, name="Staff"):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        # Permission check — Staff Manager or above
-        if not is_at_least(interaction.user, "Staff Manager"):
+        if not is_authorized(interaction.user, interaction.guild, "addroles"):
             embed = discord.Embed(
                 title="❌ Permission Denied",
-                description="You must be **Staff Manager** or above to use this command.",
+                description="You must be **Admin** or above to use this command.",
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc),
             )
@@ -156,10 +155,10 @@ class StaffCog(commands.Cog, name="Staff"):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        if not is_at_least(interaction.user, "Staff Manager"):
+        if not is_authorized(interaction.user, interaction.guild, "addroles"):
             embed = discord.Embed(
                 title="❌ Permission Denied",
-                description="You must be **Staff Manager** or above to use this command.",
+                description="You must be **Admin** or above to use this command.",
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc),
             )

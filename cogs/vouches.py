@@ -9,7 +9,7 @@ from discord.ext import commands
 import logging
 from datetime import datetime, timezone
 
-from utils.permissions import CONFIG
+from utils.permissions import is_authorized, CONFIG
 from utils.database import (
     add_vouch, add_scam_vouch,
     get_vouch_counts, get_recent_vouches, get_recent_scam_vouches,
@@ -43,6 +43,18 @@ class VouchesCog(commands.Cog, name="Vouches"):
         proof: str
     ):
         await interaction.response.defer()
+
+        if not is_authorized(interaction.user, interaction.guild, "vouch"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to submit vouches.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
 
         # Cannot vouch for yourself
         if user.id == interaction.user.id:
@@ -105,6 +117,18 @@ class VouchesCog(commands.Cog, name="Vouches"):
     ):
         await interaction.response.defer()
 
+        if not is_authorized(interaction.user, interaction.guild, "scamvouch"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to submit scam vouches.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
         if user.id == interaction.user.id:
             await interaction.followup.send(
                 embed=discord.Embed(title="❌ Invalid", description="You cannot scam-vouch yourself.", color=discord.Color.red()),
@@ -159,6 +183,18 @@ class VouchesCog(commands.Cog, name="Vouches"):
         user: discord.Member
     ):
         await interaction.response.defer()
+
+        if not is_authorized(interaction.user, interaction.guild, "checkvouches"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to check vouch records.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
 
         guild = interaction.guild
         total_v, total_sv = get_vouch_counts(user.id, guild.id)
