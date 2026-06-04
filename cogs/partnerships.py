@@ -16,7 +16,9 @@ from utils.permissions import is_authorized, CONFIG
 from utils.database import (
     log_partnership, get_partnership_count,
     get_recent_partnerships, get_partnership_leaderboard,
-    get_total_partnerships, log_staff_action
+    get_total_partnerships, log_staff_action,
+    add_partnerships_bulk, remove_partnerships_bulk,
+    get_guild_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -253,12 +255,137 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
 
         await interaction.followup.send(embed=embed)
 
+    # ── /partnershipadd ───────────────────────────────────────────────────────
+    @app_commands.command(
+        name="partnershipadd",
+        description="Manually add a number of partnerships to a staff member's count"
+    )
+    @app_commands.describe(
+        user="The staff member to credit",
+        amount="How many partnerships to add"
+    )
+    async def partnershipadd(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        amount: app_commands.Range[int, 1, 500],
+    ):
+        await interaction.response.defer()
+
+        if not is_authorized(interaction.user, interaction.guild, "partnership"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to manually adjust partnerships.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        new_total = add_partnerships_bulk(user.id, interaction.guild.id, amount, interaction.user.id)
+
+        log_staff_action(
+            "partnership_add_manual", interaction.user.id, interaction.guild.id,
+            target_id=user.id,
+            details=f"Added {amount} partnership(s) manually | New total: {new_total}"
+        )
+
+        embed = discord.Embed(
+            title="🤝 Partnerships Added",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.add_field(name="Staff Member", value=user.mention,    inline=True)
+        embed.add_field(name="Added By",     value=interaction.user.mention, inline=True)
+        embed.add_field(name="Added",        value=f"+{amount}",    inline=True)
+        embed.add_field(name="New Total",    value=str(new_total),  inline=True)
+        embed.set_footer(text=f"User ID: {user.id}")
+
+        await interaction.followup.send(embed=embed)
+        await self._send_to_logs(interaction.guild, embed)
+
+    # ── /partnershipremove ────────────────────────────────────────────────────
+    @app_commands.command(
+        name="partnershipremove",
+        description="Manually remove a number of partnerships from a staff member's count"
+    )
+    @app_commands.describe(
+        user="The staff member to deduct from",
+        amount="How many partnerships to remove"
+    )
+    async def partnershipremove(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        amount: app_commands.Range[int, 1, 500],
+    ):
+        await interaction.response.defer()
+
+        if not is_authorized(interaction.user, interaction.guild, "partnership"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to manually adjust partnerships.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        removed, new_total = remove_partnerships_bulk(user.id, interaction.guild.id, amount)
+
+        if removed == 0:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="⚠️ Nothing to Remove",
+                    description=f"{user.mention} has no partnership entries to remove.",
+                    color=discord.Color.yellow(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        log_staff_action(
+            "partnership_remove_manual", interaction.user.id, interaction.guild.id,
+            target_id=user.id,
+            details=f"Removed {removed} partnership(s) manually | New total: {new_total}"
+        )
+
+        embed = discord.Embed(
+            title="🤝 Partnerships Removed",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.add_field(name="Staff Member", value=user.mention,    inline=True)
+        embed.add_field(name="Removed By",   value=interaction.user.mention, inline=True)
+        embed.add_field(name="Removed",      value=f"-{removed}",   inline=True)
+        embed.add_field(name="New Total",    value=str(new_total),  inline=True)
+        if removed < amount:
+            embed.set_footer(text=f"⚠️ Only {removed} entry/entries existed — all removed. User ID: {user.id}")
+        else:
+            embed.set_footer(text=f"User ID: {user.id}")
+
+        await interaction.followup.send(embed=embed)
+        await self._send_to_logs(interaction.guild, embed)
+
     # ── Internal log helper ───────────────────────────────────────────────────
     async def _send_to_logs(self, guild: discord.Guild, embed: discord.Embed):
-        channel_id = CONFIG.get("PARTNERSHIP_LOGS_CHANNEL_ID")
+        # Check guild_config DB first, then fall back to config.json
+        channel_id_str = get_guild_config(guild.id, "partnership_logs_channel")
+        if channel_id_str:
+            channel_id = int(channel_id_str)
+        else:
+            channel_id = CONFIG.get("PARTNERSHIP_LOGS_CHANNEL_ID")
+
         if not channel_id:
             return
-        ch = guild.get_channel(channel_id)
+        ch = guild.get_channel(int(channel_id))
         if ch:
             try:
                 await ch.send(embed=embed)

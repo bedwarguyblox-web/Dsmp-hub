@@ -540,3 +540,88 @@ def get_total_partnerships(guild_id: int) -> int:
             "SELECT COUNT(*) as c FROM partnerships WHERE guild_id=?", (guild_id,)
         ).fetchone()
     return row["c"] if row else 0
+
+
+def add_partnerships_bulk(staff_id: int, guild_id: int, amount: int, added_by_id: int) -> int:
+    """Insert `amount` manual partnership rows for staff_id. Returns new total."""
+    with get_connection() as conn:
+        _ensure_partnerships_table(conn)
+        for _ in range(amount):
+            conn.execute("""
+                INSERT INTO partnerships (staff_id, guild_id, partner_name, notes)
+                VALUES (?, ?, 'Manual entry', ?)
+            """, (staff_id, guild_id, f"Manually added by {added_by_id}"))
+        conn.commit()
+        row = conn.execute(
+            "SELECT COUNT(*) as c FROM partnerships WHERE staff_id=? AND guild_id=?",
+            (staff_id, guild_id)
+        ).fetchone()
+    return row["c"] if row else 0
+
+
+def remove_partnerships_bulk(staff_id: int, guild_id: int, amount: int) -> tuple[int, int]:
+    """Delete up to `amount` most recent partnership rows. Returns (removed, new_total)."""
+    with get_connection() as conn:
+        _ensure_partnerships_table(conn)
+        ids = conn.execute("""
+            SELECT id FROM partnerships WHERE staff_id=? AND guild_id=?
+            ORDER BY timestamp DESC LIMIT ?
+        """, (staff_id, guild_id, amount)).fetchall()
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            conn.execute(
+                f"DELETE FROM partnerships WHERE id IN ({placeholders})",
+                [row["id"] for row in ids]
+            )
+        conn.commit()
+        row = conn.execute(
+            "SELECT COUNT(*) as c FROM partnerships WHERE staff_id=? AND guild_id=?",
+            (staff_id, guild_id)
+        ).fetchone()
+    removed = len(ids)
+    return removed, (row["c"] if row else 0)
+
+
+# ── Guild config (per-server settings) ───────────────────────────────────────
+
+def _ensure_guild_config_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS guild_config (
+            guild_id INTEGER NOT NULL,
+            key      TEXT    NOT NULL,
+            value    TEXT    NOT NULL,
+            PRIMARY KEY (guild_id, key)
+        )
+    """)
+
+
+def get_guild_config(guild_id: int, key: str) -> str | None:
+    """Return config value for a guild key, or None if not set."""
+    with get_connection() as conn:
+        _ensure_guild_config_table(conn)
+        row = conn.execute(
+            "SELECT value FROM guild_config WHERE guild_id=? AND key=?",
+            (guild_id, key)
+        ).fetchone()
+    return row["value"] if row else None
+
+
+def set_guild_config(guild_id: int, key: str, value: str):
+    """Insert or update a guild config key."""
+    with get_connection() as conn:
+        _ensure_guild_config_table(conn)
+        conn.execute("""
+            INSERT INTO guild_config (guild_id, key, value) VALUES (?, ?, ?)
+            ON CONFLICT(guild_id, key) DO UPDATE SET value=excluded.value
+        """, (guild_id, key, value))
+        conn.commit()
+
+
+def get_all_guild_config(guild_id: int) -> dict:
+    """Return all config key-value pairs for a guild."""
+    with get_connection() as conn:
+        _ensure_guild_config_table(conn)
+        rows = conn.execute(
+            "SELECT key, value FROM guild_config WHERE guild_id=?", (guild_id,)
+        ).fetchall()
+    return {row["key"]: row["value"] for row in rows}
