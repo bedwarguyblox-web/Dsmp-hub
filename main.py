@@ -36,9 +36,14 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 with open(CONFIG_PATH, encoding="utf-8") as _f:
     CONFIG = json.load(_f)
 
-BOT_TOKEN = CONFIG.get("BOT_TOKEN", "")
-if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-    logger.critical("BOT_TOKEN not set in config.json — aborting.")
+# Read token from environment variable (set in bot host's secrets panel).
+# Falls back to config.json for local dev only — never commit a real token to git.
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or CONFIG.get("BOT_TOKEN", "")
+if not BOT_TOKEN or BOT_TOKEN in ("", "YOUR_BOT_TOKEN_HERE"):
+    logger.critical(
+        "BOT_TOKEN not set. Add it as an environment variable in your bot host's "
+        "secrets/env panel, or set it in config.json for local development only."
+    )
     sys.exit(1)
 
 # ── Bot intents ──────────────────────────────────────────────────────────────
