@@ -101,11 +101,13 @@ class StaffBot(commands.Bot):
         )
 
         # Sync commands to every guild instantly (in addition to global sync)
-        # This makes slash commands appear immediately without the 1-hour global delay.
+        # copy_global_to mirrors all global commands into the guild's command list,
+        # then sync(guild=) pushes them — bypassing Discord's 1-hour global delay.
         for guild in self.guilds:
             try:
+                self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
-                logger.info("Guild-synced commands to %s (%s)", guild.name, guild.id)
+                logger.info("Guild-synced %d command(s) to %s (%s)", len(self.guilds), guild.name, guild.id)
             except discord.HTTPException as e:
                 logger.warning("Failed to guild-sync to %s: %s", guild.id, e)
 
