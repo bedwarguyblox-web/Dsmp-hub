@@ -81,12 +81,8 @@ class StaffBot(commands.Bot):
             except Exception as exc:
                 logger.exception("Failed to load cog %s: %s", module, exc)
 
-        # Sync slash commands globally
-        # On first run this may take up to 1 hour to propagate globally.
-        # For instant testing, sync to a specific guild instead:
-        #   await self.tree.sync(guild=discord.Object(id=YOUR_GUILD_ID))
-        synced = await self.tree.sync()
-        logger.info("Synced %d slash command(s) globally.", len(synced))
+        # Guild sync happens in on_ready (after guilds are available).
+        # Global sync is skipped to avoid duplicate commands.
 
     async def on_ready(self):
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id)
