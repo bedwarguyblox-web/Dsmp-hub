@@ -36,9 +36,10 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 with open(CONFIG_PATH, encoding="utf-8") as _f:
     CONFIG = json.load(_f)
 
-BOT_TOKEN = CONFIG.get("BOT_TOKEN", "")
+# Prefer BOT_TOKEN from environment (Replit secret), fall back to config.json
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or CONFIG.get("BOT_TOKEN", "")
 if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-    logger.critical("BOT_TOKEN not set in config.json — aborting.")
+    logger.critical("BOT_TOKEN not set — set it as a Replit secret named BOT_TOKEN.")
     sys.exit(1)
 
 # ── Bot intents ──────────────────────────────────────────────────────────────
