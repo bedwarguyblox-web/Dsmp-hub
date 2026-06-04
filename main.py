@@ -100,6 +100,15 @@ class StaffBot(commands.Bot):
             )
         )
 
+        # Sync commands to every guild instantly (in addition to global sync)
+        # This makes slash commands appear immediately without the 1-hour global delay.
+        for guild in self.guilds:
+            try:
+                await self.tree.sync(guild=guild)
+                logger.info("Guild-synced commands to %s (%s)", guild.name, guild.id)
+            except discord.HTTPException as e:
+                logger.warning("Failed to guild-sync to %s: %s", guild.id, e)
+
         # Start background scheduler (strike reset + builder timer checks)
         from utils.scheduler import BotScheduler
         self.scheduler = BotScheduler()
