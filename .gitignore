@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Bot data — never commit the live database (it would overwrite production data on pull)
+data/database.db
+logs/

@@ -81,8 +81,9 @@ class StaffBot(commands.Bot):
             except Exception as exc:
                 logger.exception("Failed to load cog %s: %s", module, exc)
 
-        # Guild sync happens in on_ready (after guilds are available).
-        # Global sync is skipped to avoid duplicate commands.
+        # Wipe all global slash commands so they don't duplicate the guild-synced ones.
+        # Commands are synced per-guild in on_ready for instant propagation instead.
+        await self.http.bulk_upsert_global_commands(self.application_id, [])
 
     async def on_ready(self):
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id)
