@@ -16,6 +16,13 @@ import sys
 from datetime import datetime, timezone
 from aiohttp import web
 
+# Load .env file if present (for bot-host.net and local dev)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import discord
 from discord.ext import commands
 
