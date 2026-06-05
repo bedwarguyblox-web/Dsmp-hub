@@ -16,12 +16,20 @@ import sys
 from datetime import datetime, timezone
 from aiohttp import web
 
-# Load .env file if present (for bot-host.net and local dev)
+# Load .env file if present (for local dev / hosts that support it)
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+# Fallback: read token from token.txt (one line, just the token)
+_TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.txt")
+if os.path.exists(_TOKEN_FILE):
+    with open(_TOKEN_FILE, encoding="utf-8") as _tf:
+        _file_token = _tf.read().strip()
+    if _file_token:
+        os.environ.setdefault("BOT_TOKEN", _file_token)
 
 import discord
 from discord.ext import commands

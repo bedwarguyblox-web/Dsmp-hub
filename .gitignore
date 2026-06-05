@@ -52,5 +52,6 @@ Thumbs.db
 data/database.db
 logs/
 
-# Secrets — never commit the .env file
+# Secrets — never commit these
 .env
+token.txt
