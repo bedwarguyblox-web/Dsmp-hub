@@ -50,11 +50,23 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
             return
 
         channel_id = CONFIG.get("PARTNERSHIP_CHANNEL_ID")
+
+        # DEBUG — remove once confirmed working
+        logger.info(
+            "[PARTNERSHIP DEBUG] Message in #%s (id=%s) | configured channel_id=%s | match=%s | content preview: %s",
+            message.channel.name, message.channel.id,
+            channel_id, message.channel.id == channel_id,
+            message.content[:80].replace("\n", " ")
+        )
+
         if not channel_id or message.channel.id != channel_id:
             return
 
         # Find all unique invite codes in the message
         codes = list(dict.fromkeys(INVITE_RE.findall(message.content)))
+
+        logger.info("[PARTNERSHIP DEBUG] Invite codes found: %s", codes)
+
         if not codes:
             return
 
