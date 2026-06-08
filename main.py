@@ -93,6 +93,9 @@ class StaffBot(commands.Bot):
             "cogs.perms",
             "cogs.partnerships",
             "cogs.setup",
+            "cogs.giveaways",
+            "cogs.announce",
+            "cogs.verify",
         ]
         for module in cog_modules:
             try:

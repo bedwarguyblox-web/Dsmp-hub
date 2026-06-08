@@ -16,6 +16,7 @@ from utils.database import (
     get_vouch_leaderboard, get_scam_vouch_leaderboard,
     log_staff_action
 )
+from utils.views import LeaderboardView, chunk_leaderboard
 
 logger = logging.getLogger(__name__)
 
@@ -255,55 +256,75 @@ class VouchesCog(commands.Cog, name="Vouches"):
         await interaction.followup.send(embed=embed)
 
     # ── /leaderboard_vouches ──────────────────────────────────────────────────
-    @app_commands.command(name="leaderboard_vouches", description="Top-10 most vouched users")
+    @app_commands.command(name="leaderboard_vouches", description="Most-vouched users — paginated top 10 per page")
     async def leaderboard_vouches(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
         guild = interaction.guild
-        rows  = get_vouch_leaderboard(guild.id, 10)
+        rows  = get_vouch_leaderboard(guild.id, 100)
 
-        embed = discord.Embed(
+        if not rows:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🏆 Vouch Leaderboard",
+                    description="No vouches recorded yet.",
+                    color=discord.Color.gold(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
+            return
+
+        # Resolve member display names
+        resolved = []
+        for row in rows:
+            member = guild.get_member(row["target_id"])
+            name   = member.display_name if member else f"ID:{row['target_id']}"
+            resolved.append({"name": name, "total": f"{row['total']} vouch(es)"})
+
+        pages = chunk_leaderboard(resolved, name_key="name", total_key="total")
+        view  = LeaderboardView(
+            pages=pages,
             title="🏆 Vouch Leaderboard",
             color=discord.Color.gold(),
-            timestamp=datetime.now(timezone.utc),
+            footer=f"Guild: {guild.name} • {len(rows)} total",
         )
-        if not rows:
-            embed.description = "No vouches recorded yet."
-        else:
-            medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-            lines  = []
-            for i, row in enumerate(rows):
-                member = guild.get_member(row["target_id"])
-                name   = member.display_name if member else f"ID:{row['target_id']}"
-                lines.append(f"{medals[i]} **{name}** — {row['total']} vouch(es)")
-            embed.description = "\n".join(lines)
-        embed.set_footer(text=f"Guild: {guild.name}")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=view.make_embed(), view=view)
 
     # ── /leaderboard_scamvouches ──────────────────────────────────────────────
-    @app_commands.command(name="leaderboard_scamvouches", description="Top-10 most scam-vouched users")
+    @app_commands.command(name="leaderboard_scamvouches", description="Most scam-vouched users — paginated top 10 per page")
     async def leaderboard_scamvouches(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
         guild = interaction.guild
-        rows  = get_scam_vouch_leaderboard(guild.id, 10)
+        rows  = get_scam_vouch_leaderboard(guild.id, 100)
 
-        embed = discord.Embed(
+        if not rows:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🚨 Scam Vouch Leaderboard",
+                    description="No scam vouches recorded yet.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
+            return
+
+        resolved = []
+        for row in rows:
+            member = guild.get_member(row["target_id"])
+            name   = member.display_name if member else f"ID:{row['target_id']}"
+            resolved.append({"name": name, "total": f"{row['total']} report(s)"})
+
+        medals = ["⚠️"] * 50
+        pages  = chunk_leaderboard(resolved, name_key="name", total_key="total")
+        view   = LeaderboardView(
+            pages=pages,
             title="🚨 Scam Vouch Leaderboard",
             color=discord.Color.red(),
-            timestamp=datetime.now(timezone.utc),
+            footer=f"Guild: {guild.name} • {len(rows)} total",
+            medals=medals,
         )
-        if not rows:
-            embed.description = "No scam vouches recorded yet."
-        else:
-            lines = []
-            for i, row in enumerate(rows, 1):
-                member = guild.get_member(row["target_id"])
-                name   = member.display_name if member else f"ID:{row['target_id']}"
-                lines.append(f"`#{i}` **{name}** — {row['total']} report(s)")
-            embed.description = "\n".join(lines)
-        embed.set_footer(text=f"Guild: {guild.name}")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=view.make_embed(), view=view)
 
     # ── Cooldown error handler ────────────────────────────────────────────────
     @vouch.error

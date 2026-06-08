@@ -20,6 +20,7 @@ from utils.database import (
     add_partnerships_bulk, remove_partnerships_bulk,
     get_guild_config,
 )
+from utils.views import LeaderboardView, chunk_leaderboard
 
 logger = logging.getLogger(__name__)
 
@@ -231,29 +232,35 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
             )
             return
 
-        guild = interaction.guild
-        rows  = get_partnership_leaderboard(guild.id, 10)
-        total = get_total_partnerships(guild.id)
-
-        embed = discord.Embed(
-            title="🏆 Partnership Leaderboard",
-            color=discord.Color.gold(),
-            timestamp=datetime.now(timezone.utc),
-        )
+        guild       = interaction.guild
+        rows        = get_partnership_leaderboard(guild.id, 100)
+        server_total = get_total_partnerships(guild.id)
 
         if not rows:
-            embed.description = "No partnerships have been logged yet.\nPost an invite link in the partnership channel to get started."
-        else:
-            medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-            lines  = []
-            for i, row in enumerate(rows):
-                member = guild.get_member(row["staff_id"])
-                name   = member.display_name if member else f"ID:{row['staff_id']}"
-                lines.append(f"{medals[i]} **{name}** — {row['total']} partnership(s)")
-            embed.description = "\n".join(lines)
-            embed.set_footer(text=f"Server total: {total} partnership(s)")
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🏆 Partnership Leaderboard",
+                    description="No partnerships have been logged yet.\nPost an invite link in the partnership channel to get started.",
+                    color=discord.Color.gold(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
+            return
 
-        await interaction.followup.send(embed=embed)
+        resolved = []
+        for row in rows:
+            member = guild.get_member(row["staff_id"])
+            name   = member.display_name if member else f"ID:{row['staff_id']}"
+            resolved.append({"name": name, "total": f"{row['total']} partnership(s)"})
+
+        pages = chunk_leaderboard(resolved, name_key="name", total_key="total")
+        view  = LeaderboardView(
+            pages=pages,
+            title="🏆 Partnership Leaderboard",
+            color=discord.Color.gold(),
+            footer=f"Server total: {server_total} | {len(rows)} staff ranked",
+        )
+        await interaction.followup.send(embed=view.make_embed(), view=view)
 
     # ── /partnershipadd ───────────────────────────────────────────────────────
     @app_commands.command(

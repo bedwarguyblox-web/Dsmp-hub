@@ -27,6 +27,10 @@ COMMAND_CHOICES = [
     app_commands.Choice(name="addroles / removeroles",value="addroles"),
     app_commands.Choice(name="serverify",             value="serverify"),
     app_commands.Choice(name="partnership",           value="partnership"),
+    app_commands.Choice(name="giveaway",              value="giveaway"),
+    app_commands.Choice(name="quickdrop",             value="quickdrop"),
+    app_commands.Choice(name="message",               value="message"),
+    app_commands.Choice(name="verify (setup)",        value="verify"),
 ]
 
 
