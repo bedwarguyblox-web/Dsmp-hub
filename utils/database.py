@@ -282,6 +282,28 @@ def get_recent_scam_vouches(target_id: int, guild_id: int, limit: int = 5):
         """, (target_id, guild_id, limit)).fetchall()
 
 
+def remove_vouch(voucher_id: int, target_id: int, guild_id: int) -> bool:
+    """Delete the vouch from voucher→target. Returns True if a row was deleted."""
+    with get_connection() as conn:
+        cur = conn.execute("""
+            DELETE FROM vouches
+            WHERE voucher_id=? AND target_id=? AND guild_id=?
+        """, (voucher_id, target_id, guild_id))
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def remove_scam_vouch(voucher_id: int, target_id: int, guild_id: int) -> bool:
+    """Delete the scam-vouch from voucher→target. Returns True if a row was deleted."""
+    with get_connection() as conn:
+        cur = conn.execute("""
+            DELETE FROM scam_vouches
+            WHERE voucher_id=? AND target_id=? AND guild_id=?
+        """, (voucher_id, target_id, guild_id))
+        conn.commit()
+    return cur.rowcount > 0
+
+
 def get_vouch_leaderboard(guild_id: int, limit: int = 10):
     with get_connection() as conn:
         return conn.execute("""

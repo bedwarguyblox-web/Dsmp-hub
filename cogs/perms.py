@@ -80,10 +80,10 @@ class PermsCog(commands.Cog, name="Perms"):
     # ── /giveperms ────────────────────────────────────────────────────────────
     @app_commands.command(
         name="giveperms",
-        description="Grant a user or role access to a specific bot command (Owner only)",
+        description="Grant a user or role access to one or more bot commands (Owner only)",
     )
     @app_commands.describe(
-        command="Command to grant access to — type to search all current and future commands",
+        command="Command(s) to grant — type to search, or separate multiple with commas (e.g. strike, vouch, all)",
         user="The member to grant access to (leave blank to target a role)",
         role="The role to grant access to (leave blank to target a user)",
     )
@@ -136,33 +136,47 @@ class PermsCog(commands.Cog, name="Perms"):
 
         target_type = "user" if user else "role"
         target      = user or role
-        cmd_value   = command.strip().lower()
 
-        is_new = add_perm_grant(
-            target_type, target.id, interaction.guild.id,
-            cmd_value, interaction.user.id
-        )
+        # Support comma-separated list of commands
+        cmd_list = [c.strip().lower() for c in command.split(",") if c.strip()]
 
-        if not is_new:
+        granted_new:  list[str] = []
+        already_had:  list[str] = []
+
+        for cmd_value in cmd_list:
+            is_new = add_perm_grant(
+                target_type, target.id, interaction.guild.id,
+                cmd_value, interaction.user.id
+            )
+            if is_new:
+                granted_new.append(cmd_value)
+                logger.info(
+                    "Perm granted: %s %s → %s (guild %s) by %s",
+                    target_type, target.id, cmd_value, interaction.guild.id, interaction.user.id,
+                )
+            else:
+                already_had.append(cmd_value)
+
+        if not granted_new and already_had:
+            desc = ", ".join(f"`{c}`" for c in already_had)
             embed = discord.Embed(
                 title="ℹ️ Already Granted",
-                description=f"{target.mention} already has access to **`{cmd_value}`**.",
+                description=f"{target.mention} already has access to {desc}.",
                 color=discord.Color.blue(),
                 timestamp=datetime.now(timezone.utc),
             )
         else:
             embed = discord.Embed(
-                title="✅ Permission Granted",
+                title="✅ Permission(s) Granted",
                 color=discord.Color.green(),
                 timestamp=datetime.now(timezone.utc),
             )
-            embed.add_field(name="Target",     value=f"{target.mention} ({target_type})", inline=True)
-            embed.add_field(name="Command",    value=f"`{cmd_value}`",                    inline=True)
-            embed.add_field(name="Granted By", value=interaction.user.mention,            inline=True)
-            logger.info(
-                "Perm granted: %s %s → %s (guild %s) by %s",
-                target_type, target.id, cmd_value, interaction.guild.id, interaction.user.id,
-            )
+            embed.add_field(name="Target",     value=f"{target.mention} ({target_type})",                inline=True)
+            embed.add_field(name="Granted By", value=interaction.user.mention,                           inline=True)
+            if granted_new:
+                embed.add_field(name="✅ Newly Granted", value=", ".join(f"`{c}`" for c in granted_new), inline=False)
+            if already_had:
+                embed.add_field(name="ℹ️ Already Had",  value=", ".join(f"`{c}`" for c in already_had), inline=False)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from utils.permissions import is_authorized, CONFIG
 from utils.database import (
     add_vouch, add_scam_vouch,
+    remove_vouch, remove_scam_vouch,
     get_vouch_counts, get_recent_vouches, get_recent_scam_vouches,
     get_vouch_leaderboard, get_scam_vouch_leaderboard,
     log_staff_action
@@ -173,6 +174,124 @@ class VouchesCog(commands.Cog, name="Vouches"):
         await interaction.followup.send(embed=embed)
 
         log_staff_action("scam_vouch", interaction.user.id, guild.id, target_id=user.id, details=proof)
+        await self._send_to_logs(guild, CONFIG.get("SCAM_VOUCH_LOGS_CHANNEL_ID"), embed)
+
+    # ── /vouchremove ──────────────────────────────────────────────────────────
+    @app_commands.command(name="vouchremove", description="Remove a specific vouch from a voucher to a target user")
+    @app_commands.describe(
+        user="The member whose vouch record you are editing (the target)",
+        voucher="The member who originally submitted the vouch"
+    )
+    async def vouchremove(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        voucher: discord.Member,
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if not is_authorized(interaction.user, interaction.guild, "vouch"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to remove vouches.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        guild   = interaction.guild
+        removed = remove_vouch(voucher.id, user.id, guild.id)
+
+        if not removed:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="⚠️ Not Found",
+                    description=f"No vouch from {voucher.mention} → {user.mention} exists to remove.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        total_v, _ = get_vouch_counts(user.id, guild.id)
+
+        embed = discord.Embed(
+            title="🗑️ Vouch Removed",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Target",         value=user.mention,            inline=True)
+        embed.add_field(name="Voucher Removed", value=voucher.mention,         inline=True)
+        embed.add_field(name="Remaining Vouches", value=str(total_v),          inline=True)
+        embed.add_field(name="Removed By",     value=interaction.user.mention, inline=False)
+        embed.set_footer(text=f"Target ID: {user.id}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        log_staff_action("vouchremove", interaction.user.id, guild.id,
+                         target_id=user.id, details=f"Removed vouch from {voucher.id}")
+        await self._send_to_logs(guild, CONFIG.get("VOUCH_LOGS_CHANNEL_ID"), embed)
+
+    # ── /scamvouchremove ──────────────────────────────────────────────────────
+    @app_commands.command(name="scamvouchremove", description="Remove a specific scam vouch from a reporter to a target user")
+    @app_commands.describe(
+        user="The member whose scam vouch record you are editing (the target)",
+        voucher="The member who originally submitted the scam vouch"
+    )
+    async def scamvouchremove(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        voucher: discord.Member,
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if not is_authorized(interaction.user, interaction.guild, "scamvouch"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to remove scam vouches.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        guild   = interaction.guild
+        removed = remove_scam_vouch(voucher.id, user.id, guild.id)
+
+        if not removed:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="⚠️ Not Found",
+                    description=f"No scam vouch from {voucher.mention} → {user.mention} exists to remove.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        _, total_sv = get_vouch_counts(user.id, guild.id)
+
+        embed = discord.Embed(
+            title="🗑️ Scam Vouch Removed",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Target",              value=user.mention,            inline=True)
+        embed.add_field(name="Reporter Removed",    value=voucher.mention,         inline=True)
+        embed.add_field(name="Remaining Scam Vouches", value=str(total_sv),        inline=True)
+        embed.add_field(name="Removed By",          value=interaction.user.mention, inline=False)
+        embed.set_footer(text=f"Target ID: {user.id}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        log_staff_action("scamvouchremove", interaction.user.id, guild.id,
+                         target_id=user.id, details=f"Removed scam vouch from {voucher.id}")
         await self._send_to_logs(guild, CONFIG.get("SCAM_VOUCH_LOGS_CHANNEL_ID"), embed)
 
     # ── /checkvouches ─────────────────────────────────────────────────────────
