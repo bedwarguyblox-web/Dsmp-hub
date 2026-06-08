@@ -96,6 +96,7 @@ class StaffBot(commands.Bot):
             "cogs.giveaways",
             "cogs.announce",
             "cogs.verify",
+            "cogs.tickets",
         ]
         for module in cog_modules:
             try:

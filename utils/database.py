@@ -604,6 +604,93 @@ def remove_partnerships_bulk(staff_id: int, guild_id: int, amount: int) -> tuple
     return removed, (row["c"] if row else 0)
 
 
+# ── Ticket system ─────────────────────────────────────────────────────────────
+
+def _ensure_tickets_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tickets (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id     TEXT    NOT NULL UNIQUE,
+            user_id       INTEGER NOT NULL,
+            guild_id      INTEGER NOT NULL,
+            category      TEXT    NOT NULL,
+            status        TEXT    NOT NULL DEFAULT 'intake',
+            answers       TEXT,
+            staff_msg_id  INTEGER,
+            opened_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+            closed_at     TEXT
+        )
+    """)
+
+
+def open_ticket(ticket_id: str, user_id: int, guild_id: int, category: str) -> bool:
+    """Create a new ticket. Returns False if user already has an open ticket."""
+    try:
+        with get_connection() as conn:
+            _ensure_tickets_table(conn)
+            conn.execute("""
+                INSERT INTO tickets (ticket_id, user_id, guild_id, category)
+                VALUES (?, ?, ?, ?)
+            """, (ticket_id, user_id, guild_id, category))
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def get_open_ticket_for_user(user_id: int, guild_id: int):
+    """Return the most recent open (non-closed) ticket row for a user, or None."""
+    with get_connection() as conn:
+        _ensure_tickets_table(conn)
+        return conn.execute("""
+            SELECT * FROM tickets
+            WHERE user_id=? AND guild_id=? AND status != 'closed'
+            ORDER BY opened_at DESC LIMIT 1
+        """, (user_id, guild_id)).fetchone()
+
+
+def get_ticket(ticket_id: str):
+    with get_connection() as conn:
+        _ensure_tickets_table(conn)
+        return conn.execute(
+            "SELECT * FROM tickets WHERE ticket_id=?", (ticket_id,)
+        ).fetchone()
+
+
+def update_ticket(ticket_id: str, **fields):
+    """Update arbitrary columns on a ticket row."""
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    values = list(fields.values()) + [ticket_id]
+    with get_connection() as conn:
+        _ensure_tickets_table(conn)
+        conn.execute(
+            f"UPDATE tickets SET {set_clause} WHERE ticket_id=?", values
+        )
+        conn.commit()
+
+
+def close_ticket(ticket_id: str):
+    with get_connection() as conn:
+        _ensure_tickets_table(conn)
+        conn.execute("""
+            UPDATE tickets SET status='closed', closed_at=datetime('now')
+            WHERE ticket_id=?
+        """, (ticket_id,))
+        conn.commit()
+
+
+def get_all_open_tickets(guild_id: int):
+    with get_connection() as conn:
+        _ensure_tickets_table(conn)
+        return conn.execute("""
+            SELECT * FROM tickets
+            WHERE guild_id=? AND status != 'closed'
+            ORDER BY opened_at DESC
+        """, (guild_id,)).fetchall()
+
+
 # ── Guild config (per-server settings) ───────────────────────────────────────
 
 def _ensure_guild_config_table(conn):
