@@ -215,6 +215,125 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
     ):
         await self._run(interaction, prize, duration, winners, is_quickdrop=True)
 
+    # ── /rerollgiveaway ───────────────────────────────────────────────────────
+    @app_commands.command(
+        name="rerollgiveaway",
+        description="Reroll new winner(s) for an ended giveaway or quickdrop",
+    )
+    @app_commands.describe(
+        message_id="ID of the ended giveaway message to reroll",
+        winners="How many new winners to pick (default 1)",
+    )
+    async def rerollgiveaway(
+        self,
+        interaction: discord.Interaction,
+        message_id: str,
+        winners: app_commands.Range[int, 1, 10] = 1,
+    ):
+        await interaction.response.defer()
+
+        if not is_authorized(interaction.user, interaction.guild, "giveaway"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above (or granted `giveaway` access) to reroll.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # Validate message ID
+        try:
+            mid = int(message_id)
+        except ValueError:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Invalid Message ID",
+                    description="Please provide a valid message ID (right-click the message → Copy Message ID).",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # Try to fetch the message from the current channel
+        try:
+            msg = await interaction.channel.fetch_message(mid)
+        except discord.NotFound:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Message Not Found",
+                    description=f"Could not find message `{mid}` in this channel. Make sure you run this command in the same channel as the giveaway.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+        except discord.Forbidden:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ No Access",
+                    description="I don't have permission to read that message.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # Collect entrants from 🎉 reaction
+        entrants: list[discord.User] = []
+        for reaction in msg.reactions:
+            if str(reaction.emoji) == ENTRY_EMOJI:
+                async for user in reaction.users():
+                    if not user.bot:
+                        entrants.append(user)
+                break
+
+        # Deduplicate
+        seen: set[int] = set()
+        unique_entrants: list[discord.User] = []
+        for u in entrants:
+            if u.id not in seen:
+                seen.add(u.id)
+                unique_entrants.append(u)
+        entrants = unique_entrants
+
+        if not entrants:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="😢 No Entrants",
+                    description=f"That message has no {ENTRY_EMOJI} reactions from non-bot users — nobody to reroll from.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
+            return
+
+        actual_winners = min(winners, len(entrants))
+        picked         = random.sample(entrants, actual_winners)
+        winner_mentions = ", ".join(w.mention for w in picked)
+
+        await interaction.followup.send(
+            content=winner_mentions,
+            embed=discord.Embed(
+                title=f"🔁 Reroll — New Winner{'s' if actual_winners > 1 else ''}!",
+                description=(
+                    f"🏆 {winner_mentions}\n\n"
+                    f"Congratulations! Please contact {interaction.user.mention} to claim your prize.\n"
+                    f"*(Rerolled from [this message]({msg.jump_url}))*"
+                ),
+                color=discord.Color.gold(),
+                timestamp=datetime.now(timezone.utc),
+            ),
+        )
+
+        logger.info(
+            "Reroll by %s in guild %s: msg=%s, winners=%s",
+            interaction.user, interaction.guild.name, mid, [w.id for w in picked],
+        )
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(GiveawaysCog(bot))
