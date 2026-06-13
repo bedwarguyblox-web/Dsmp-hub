@@ -194,6 +194,62 @@ class PartnershipReqCog(commands.Cog, name="PartnershipReq"):
         )
 
     @req_group.command(
+        name="preview",
+        description="Preview what the requirements embed looks like at any member count (Admin only)",
+    )
+    @app_commands.describe(members="Hypothetical member count to preview (e.g. 250)")
+    async def req_preview(
+        self,
+        interaction: discord.Interaction,
+        members: app_commands.Range[int, 1, 100000],
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if not is_authorized(interaction.user, interaction.guild, "partnershipreq"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        guild  = interaction.guild
+        pp_str, mem_str = _resolve_mentions(guild)
+        ticket_ch_id    = CONFIG.get("PARTNERSHIP_TICKET_CHANNEL_ID")
+        ticket_mention  = f"<#{ticket_ch_id}>" if ticket_ch_id else "#tickets"
+        current_idx     = _current_tier_index(members)
+
+        embed = discord.Embed(
+            title=f"🔍 Requirements Preview — {members:,} members",
+            description="*This is a preview only — your live embed is unchanged.*",
+            color=discord.Color.gold(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text=f"Previewing at {members:,} members • Current server: {sum(1 for m in guild.members if not m.bot):,} members")
+
+        for i, (lo_pct, hi_pct, template) in enumerate(TIERS):
+            label     = template.format(pp=pp_str, member=mem_str)
+            range_str = _tier_member_range(lo_pct, hi_pct, members)
+            is_current = (i == current_idx)
+            field_name = f"{'▶ ' if is_current else ''}**{range_str}**{'  ← at this size' if is_current else ''}"
+            embed.add_field(name=field_name, value=label, inline=False)
+
+        embed.add_field(
+            name="📋 Notes",
+            value=(
+                f"• Open {ticket_mention} to partner\n"
+                "• If you leave within **1 week** of posting your ad, the ad will be deleted\n"
+                "• **Partner cooldown:** 3 days"
+            ),
+            inline=False,
+        )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @req_group.command(
         name="refresh",
         description="Manually refresh the partnership requirements embed (Admin only)",
     )
