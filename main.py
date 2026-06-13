@@ -98,6 +98,7 @@ class StaffBot(commands.Bot):
             "cogs.verify",
             "cogs.tickets",
             "cogs.partnershipreq",
+            "cogs.blacklist",
         ]
         for module in cog_modules:
             try:

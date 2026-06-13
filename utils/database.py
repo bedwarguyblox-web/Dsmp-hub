@@ -734,3 +734,66 @@ def get_all_guild_config(guild_id: int) -> dict:
             "SELECT key, value FROM guild_config WHERE guild_id=?", (guild_id,)
         ).fetchall()
     return {row["key"]: row["value"] for row in rows}
+
+
+# ── Partner blacklist ─────────────────────────────────────────────────────────
+
+def _ensure_blacklist_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS partner_blacklist (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id    INTEGER NOT NULL UNIQUE,
+            server_name  TEXT    NOT NULL,
+            reason       TEXT    NOT NULL,
+            added_by     INTEGER NOT NULL,
+            guild_id     INTEGER NOT NULL,
+            timestamp    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+
+def blacklist_add(server_id: int, server_name: str, reason: str,
+                  added_by: int, guild_id: int) -> bool:
+    """Add a server to the blacklist. Returns True if new, False if already listed."""
+    try:
+        with get_connection() as conn:
+            _ensure_blacklist_table(conn)
+            conn.execute("""
+                INSERT INTO partner_blacklist
+                    (server_id, server_name, reason, added_by, guild_id)
+                VALUES (?, ?, ?, ?, ?)
+            """, (server_id, server_name, reason, added_by, guild_id))
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def blacklist_remove(server_id: int) -> bool:
+    """Remove a server from the blacklist. Returns True if a row was deleted."""
+    with get_connection() as conn:
+        _ensure_blacklist_table(conn)
+        cur = conn.execute(
+            "DELETE FROM partner_blacklist WHERE server_id=?", (server_id,)
+        )
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def blacklist_check(server_id: int):
+    """Return the blacklist row for server_id, or None if not blacklisted."""
+    with get_connection() as conn:
+        _ensure_blacklist_table(conn)
+        return conn.execute(
+            "SELECT * FROM partner_blacklist WHERE server_id=?", (server_id,)
+        ).fetchone()
+
+
+def blacklist_list(guild_id: int):
+    """Return all blacklisted entries for a guild, newest first."""
+    with get_connection() as conn:
+        _ensure_blacklist_table(conn)
+        return conn.execute("""
+            SELECT * FROM partner_blacklist WHERE guild_id=?
+            ORDER BY timestamp DESC
+        """, (guild_id,)).fetchall()
