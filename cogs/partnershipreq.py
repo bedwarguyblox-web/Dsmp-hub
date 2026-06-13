@@ -39,8 +39,8 @@ TIERS = [
     (30,  60,  "You: **@everyone**\nWe: **{pp}**"),
     (60,  80,  "You: **{member}**\nWe: **@here**"),
     (80,  100, "You: **{member}**\nWe: **@here** + **{pp}**"),
-    (100, 120, "Both: **same ping**"),
-    (120, 300, "You: **@here** + **{pp}**\nWe: **{member}**"),
+    (100, 130, "Both: **same ping**"),
+    (130, 300, "You: **@here** + **{pp}**\nWe: **{member}**"),
     (300, None, "Your requirements *(must be fair)*"),
 ]
 
