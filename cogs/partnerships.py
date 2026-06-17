@@ -30,6 +30,14 @@ INVITE_RE = re.compile(
     re.IGNORECASE
 )
 
+# Partnership tier role names in rank order (index 0 = rank 1, etc.)
+_PARTNERSHIP_TIERS = [
+    "Head Partnership Manager",   # rank 1
+    "Sr Partnership Manager",     # rank 2
+    "Partnership Manager",        # rank 3
+]
+_PARTNERSHIP_FALLBACK = "Jr Partnership Manager"  # rank 4 and below
+
 
 class PartnershipsCog(commands.Cog, name="Partnerships"):
     """Partnership tracking commands + auto-detection from channel."""
@@ -98,6 +106,7 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
                 color=discord.Color.green(),
                 timestamp=datetime.now(timezone.utc),
             ))
+            await self._update_partnership_roles(guild)
 
     # ── /partnership log ─────────────────────────────────────────────────────
     @partnership_group.command(
@@ -152,6 +161,7 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
 
         await interaction.followup.send(embed=embed)
         await self._send_to_logs(guild, embed)
+        await self._update_partnership_roles(guild)
 
     # ── /partnership stats ───────────────────────────────────────────────────
     @partnership_group.command(
@@ -313,6 +323,7 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
 
         await interaction.followup.send(embed=embed)
         await self._send_to_logs(interaction.guild, embed)
+        await self._update_partnership_roles(interaction.guild)
 
     # ── /partnershipremove ────────────────────────────────────────────────────
     @app_commands.command(
@@ -380,6 +391,75 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
 
         await interaction.followup.send(embed=embed)
         await self._send_to_logs(interaction.guild, embed)
+        await self._update_partnership_roles(interaction.guild)
+
+    # ── Partnership auto-role ─────────────────────────────────────────────────
+    async def _update_partnership_roles(self, guild: discord.Guild):
+        """Re-rank every member on the leaderboard and assign the correct tier role."""
+        staff_roles_cfg = CONFIG.get("STAFF_ROLES", {})
+
+        # Collect all four tier role objects (skip any that aren't configured)
+        all_tier_names = _PARTNERSHIP_TIERS + [_PARTNERSHIP_FALLBACK]
+        tier_roles: dict[str, discord.Role] = {}
+        for name in all_tier_names:
+            rid = staff_roles_cfg.get(name)
+            if rid:
+                role = guild.get_role(int(rid))
+                if role:
+                    tier_roles[name] = role
+
+        if not tier_roles:
+            logger.warning("No partnership tier roles found in guild %s — skipping auto-role", guild.id)
+            return
+
+        all_tier_role_objs = list(tier_roles.values())
+
+        # Full leaderboard — everyone with at least 1 partnership
+        rows = get_partnership_leaderboard(guild.id, 500)
+
+        # Build: staff_id → the role name they should hold
+        assignments: dict[int, str] = {}
+        for i, row in enumerate(rows):
+            rank = i + 1
+            if rank <= len(_PARTNERSHIP_TIERS):
+                assignments[row["staff_id"]] = _PARTNERSHIP_TIERS[rank - 1]
+            else:
+                assignments[row["staff_id"]] = _PARTNERSHIP_FALLBACK
+
+        # Apply changes to each ranked member
+        for staff_id, correct_name in assignments.items():
+            member = guild.get_member(staff_id)
+            if not member:
+                continue
+            correct_role = tier_roles.get(correct_name)
+            if not correct_role:
+                continue
+
+            roles_to_remove = [
+                r for r in all_tier_role_objs
+                if r != correct_role and r in member.roles
+            ]
+            needs_add = correct_role not in member.roles
+
+            try:
+                if roles_to_remove:
+                    await member.remove_roles(
+                        *roles_to_remove,
+                        reason="Partnership leaderboard auto-role update"
+                    )
+                if needs_add:
+                    await member.add_roles(
+                        correct_role,
+                        reason="Partnership leaderboard auto-role update"
+                    )
+                    logger.info(
+                        "Auto-role: gave %s (%s) the '%s' role",
+                        member, staff_id, correct_name
+                    )
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                logger.warning(
+                    "Could not update partnership roles for %s: %s", staff_id, exc
+                )
 
     # ── Internal log helper ───────────────────────────────────────────────────
     async def _send_to_logs(self, guild: discord.Guild, embed: discord.Embed):
