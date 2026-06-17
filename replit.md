@@ -89,6 +89,12 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
+- **DATA RESETS ON RESTART?** — `data/database.db` is gitignored, so any bot host that does a `git pull` on restart will wipe the file. Fix: set the `DATABASE_PATH` environment variable on your bot host to a path on a **persistent volume** that survives restarts:
+  ```
+  DATABASE_PATH=/data/database.db          # Railway volume at /data
+  DATABASE_PATH=/home/container/db.sqlite  # Pterodactyl persistent folder
+  ```
+  The bot logs `Database path: <path>` on startup — check it to confirm the right file is being used.
 - Bot must be **running** before the API server returns real data (it creates the SQLite DB on first start)
 - Slash commands take up to **1 hour** to appear globally after first sync — this is a Discord limitation
 - `better-sqlite3` requires the `onlyBuiltDependencies` entry in `pnpm-workspace.yaml` to build its native module

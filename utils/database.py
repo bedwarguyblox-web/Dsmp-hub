@@ -10,8 +10,21 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Path to the SQLite database file
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "database.db")
+# ── Database path ─────────────────────────────────────────────────────────────
+# Priority: DATABASE_PATH env var → default data/database.db beside project root
+#
+# ⚠️  IMPORTANT FOR BOT HOSTS THAT RESET ON RESTART (Railway, Heroku, etc.):
+# Set the DATABASE_PATH environment variable to a path on a PERSISTENT VOLUME
+# that survives restarts and git pulls, e.g.:
+#
+#   DATABASE_PATH=/data/database.db          (Railway volume mounted at /data)
+#   DATABASE_PATH=/home/container/db.sqlite  (Pterodactyl persistent folder)
+#
+# If you do NOT set this, the bot uses data/database.db inside the project
+# folder. Since that file is gitignored, any host that does a fresh git pull
+# on restart will wipe your data.
+_DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "database.db")
+DB_PATH = os.environ.get("DATABASE_PATH", _DEFAULT_DB)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -26,6 +39,7 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     """Create all tables if they do not already exist."""
+    logger.info("Database path: %s", DB_PATH)
     with get_connection() as conn:
         c = conn.cursor()
 
