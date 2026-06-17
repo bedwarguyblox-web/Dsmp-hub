@@ -396,11 +396,17 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
     # ── Partnership auto-role ─────────────────────────────────────────────────
     async def _update_partnership_roles(self, guild: discord.Guild):
         """Re-rank every member on the leaderboard and assign the correct tier role."""
+        try:
+            await self._do_update_partnership_roles(guild)
+        except Exception as exc:
+            logger.error("_update_partnership_roles failed for guild %s: %s", guild.id, exc, exc_info=True)
+
+    async def _do_update_partnership_roles(self, guild: discord.Guild):
         staff_roles_cfg = CONFIG.get("STAFF_ROLES", {})
 
         # Collect all four tier role objects (skip any that aren't configured)
         all_tier_names = _PARTNERSHIP_TIERS + [_PARTNERSHIP_FALLBACK]
-        tier_roles: dict[str, discord.Role] = {}
+        tier_roles = {}
         for name in all_tier_names:
             rid = staff_roles_cfg.get(name)
             if rid:
@@ -418,7 +424,7 @@ class PartnershipsCog(commands.Cog, name="Partnerships"):
         rows = get_partnership_leaderboard(guild.id, 500)
 
         # Build: staff_id → the role name they should hold
-        assignments: dict[int, str] = {}
+        assignments = {}
         for i, row in enumerate(rows):
             rank = i + 1
             if rank <= len(_PARTNERSHIP_TIERS):
