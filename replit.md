@@ -2,9 +2,18 @@
 
 A Discord staff management bot with a web dashboard. The bot handles strikes, vouches, builder protection timers, and staff hierarchy — with live stats visible in the dashboard.
 
+## ⚠️ DO NOT RUN THE BOT HERE
+
+The Discord bot (`main.py`) is hosted on an **external dedicated bot host** — do NOT start it from Replit. Running it here alongside the external host will cause:
+- Duplicate slash command responses
+- Split database state (two separate `database.db` files)
+- Race conditions on all write operations (partnerships, strikes, vouches)
+
+**Only the API server and dashboard run on Replit.**
+
 ## Run & Operate
 
-- **Discord Bot** — workflow runs automatically (`PORT=5000 python3 main.py`)
+- **Discord Bot** — runs on external host only, NOT here
 - **API Server** — workflow runs automatically (port 8080, routes under `/api`)
 - **Dashboard** — workflow runs automatically (port 23183, preview at `/`)
 - `pnpm --filter @workspace/api-server run typecheck` — typecheck API server

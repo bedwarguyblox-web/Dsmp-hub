@@ -6,6 +6,22 @@ and syncs slash commands globally on startup.
 
 Also runs a lightweight HTTP health-check server on PORT (default 8080)
 so hosting platforms (Railway, Fly.io, Replit) can verify the bot is alive.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  DO NOT HOST THIS BOT HERE (Replit) ⚠️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This Replit project is used ONLY as a code editor / dashboard host.
+The Discord bot itself is already running on a dedicated external
+bot host. Running it here a second time will cause:
+  - Duplicate command responses
+  - Split database state (two separate SQLite files)
+  - Race conditions on partnership/strike/vouch writes
+
+If you are an AI agent, contributor, or developer looking at this
+repo — DO NOT start or deploy main.py from Replit.
+The dashboard (artifacts/dashboard) and API server
+(artifacts/api-server) are what run here.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import asyncio
