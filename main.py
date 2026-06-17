@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import sys
 from datetime import datetime, timezone
 from aiohttp import web
@@ -94,10 +95,31 @@ class StaffBot(commands.Bot):
 
     async def setup_hook(self):
         """Called once before the bot connects — load cogs and sync commands."""
+        # ── Database backup / restore ─────────────────────────────────────────
+        # Hidden folder — most SFTP sync tools skip dotfolders, so this
+        # survives even if the main database.db gets wiped by a file sync.
+        from utils.database import DB_PATH
+        _backup_dir  = os.path.join(os.path.dirname(DB_PATH), ".dbbackup")
+        _backup_file = os.path.join(_backup_dir, "database.db")
+        os.makedirs(_backup_dir, exist_ok=True)
+
+        if not os.path.exists(DB_PATH) and os.path.exists(_backup_file):
+            shutil.copy2(_backup_file, DB_PATH)
+            logger.warning(
+                "Main database was missing — restored from backup at %s", _backup_file
+            )
+
         # Initialise SQLite database
         from utils.database import init_db
         init_db()
         logger.info("Database initialised.")
+
+        # Save a fresh backup now that the DB is confirmed healthy
+        try:
+            shutil.copy2(DB_PATH, _backup_file)
+            logger.info("Database backed up to %s", _backup_file)
+        except Exception as exc:
+            logger.warning("Could not back up database: %s", exc)
 
         # Load all cogs
         cog_modules = [
