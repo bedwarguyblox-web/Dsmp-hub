@@ -14,6 +14,7 @@ from utils.database import (
     add_strike, remove_strike, get_strike_count,
     get_strike_history, log_staff_action
 )
+from cogs.activitycheck import _auto_demote_staff
 
 logger = logging.getLogger(__name__)
 
@@ -78,16 +79,23 @@ class StrikesCog(commands.Cog, name="Strikes"):
         )
 
         # ── Response embed ──────────────────────────────────────────────────
+        will_demote = new_count >= 3
         embed = discord.Embed(
             title="⚡ Strike Issued",
             color=discord.Color.red(),
             timestamp=datetime.now(timezone.utc),
         )
         embed.set_thumbnail(url=user.display_avatar.url)
-        embed.add_field(name="User",         value=user.mention,            inline=True)
-        embed.add_field(name="Moderator",    value=interaction.user.mention, inline=True)
-        embed.add_field(name="Total Strikes",value=str(new_count),           inline=True)
-        embed.add_field(name="Reason",       value=reason,                   inline=False)
+        embed.add_field(name="User",          value=user.mention,             inline=True)
+        embed.add_field(name="Moderator",     value=interaction.user.mention, inline=True)
+        embed.add_field(name="Total Strikes", value=str(new_count),           inline=True)
+        embed.add_field(name="Reason",        value=reason,                   inline=False)
+        if will_demote:
+            embed.add_field(
+                name="🔴 Auto-Demotion Triggered",
+                value="This member has reached **3 strikes** — all staff roles are being removed.",
+                inline=False,
+            )
         embed.set_footer(text=f"User ID: {user.id}")
         await interaction.followup.send(embed=embed)
 
@@ -105,6 +113,13 @@ class StrikesCog(commands.Cog, name="Strikes"):
             await user.send(embed=dm_embed)
         except discord.Forbidden:
             pass  # User has DMs closed — silently ignore
+
+        # ── Auto-demote if 3+ strikes ────────────────────────────────────────
+        if will_demote:
+            await _auto_demote_staff(
+                self.bot, user, guild, new_count,
+                f"Reached 3 strikes (last: {reason})"
+            )
 
     # ── /removestrike ────────────────────────────────────────────────────────
     @app_commands.command(name="removestrike", description="Remove one strike from a user")

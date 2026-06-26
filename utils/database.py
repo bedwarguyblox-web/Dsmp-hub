@@ -811,3 +811,110 @@ def blacklist_list(guild_id: int):
             SELECT * FROM partner_blacklist WHERE guild_id=?
             ORDER BY timestamp DESC
         """, (guild_id,)).fetchall()
+
+
+# ── Activity check system ─────────────────────────────────────────────────────
+
+def _ensure_activity_check_tables(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS activity_checks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id    INTEGER NOT NULL,
+            channel_id  INTEGER NOT NULL,
+            message_id  INTEGER,
+            actor_id    INTEGER NOT NULL,
+            deadline    TEXT    NOT NULL,
+            status      TEXT    NOT NULL DEFAULT 'active',
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS activity_responses (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            check_id     INTEGER NOT NULL,
+            staff_id     INTEGER NOT NULL,
+            responded_at TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(check_id, staff_id)
+        )
+    """)
+
+
+def create_activity_check(guild_id: int, channel_id: int,
+                           actor_id: int, deadline: str) -> int:
+    """Create a new activity check and return its ID."""
+    with get_connection() as conn:
+        _ensure_activity_check_tables(conn)
+        cur = conn.execute("""
+            INSERT INTO activity_checks (guild_id, channel_id, actor_id, deadline)
+            VALUES (?, ?, ?, ?)
+        """, (guild_id, channel_id, actor_id, deadline))
+        conn.commit()
+    return cur.lastrowid
+
+
+def update_activity_check_message(check_id: int, message_id: int):
+    """Save the Discord message ID for a check (set after the message is sent)."""
+    with get_connection() as conn:
+        _ensure_activity_check_tables(conn)
+        conn.execute(
+            "UPDATE activity_checks SET message_id=? WHERE id=?",
+            (message_id, check_id)
+        )
+        conn.commit()
+
+
+def update_activity_check_status(check_id: int, status: str):
+    with get_connection() as conn:
+        _ensure_activity_check_tables(conn)
+        conn.execute(
+            "UPDATE activity_checks SET status=? WHERE id=?",
+            (status, check_id)
+        )
+        conn.commit()
+
+
+def get_activity_check(check_id: int):
+    with get_connection() as conn:
+        _ensure_activity_check_tables(conn)
+        return conn.execute(
+            "SELECT * FROM activity_checks WHERE id=?", (check_id,)
+        ).fetchone()
+
+
+def get_activity_check_by_message(message_id: int):
+    with get_connection() as conn:
+        _ensure_activity_check_tables(conn)
+        return conn.execute(
+            "SELECT * FROM activity_checks WHERE message_id=?", (message_id,)
+        ).fetchone()
+
+
+def get_all_active_activity_checks():
+    with get_connection() as conn:
+        _ensure_activity_check_tables(conn)
+        return conn.execute(
+            "SELECT * FROM activity_checks WHERE status='active'"
+        ).fetchall()
+
+
+def record_activity_response(check_id: int, staff_id: int) -> bool:
+    """Record a staff member's attendance. Returns True if new, False if duplicate."""
+    try:
+        with get_connection() as conn:
+            _ensure_activity_check_tables(conn)
+            conn.execute("""
+                INSERT INTO activity_responses (check_id, staff_id)
+                VALUES (?, ?)
+            """, (check_id, staff_id))
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def get_activity_responses(check_id: int):
+    with get_connection() as conn:
+        _ensure_activity_check_tables(conn)
+        return conn.execute(
+            "SELECT * FROM activity_responses WHERE check_id=?", (check_id,)
+        ).fetchall()

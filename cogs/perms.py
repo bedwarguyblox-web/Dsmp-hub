@@ -28,18 +28,19 @@ def _denied() -> discord.Embed:
     )
 
 
-def _collect_command_names(tree: app_commands.CommandTree, guild: discord.Guild | None) -> list[str]:
+def _collect_command_names(tree: app_commands.CommandTree, guild) -> list:
     """
     Walk the command tree and return a flat list of every grantable command name.
-    Group subcommands are identified by their parent name (e.g. 'partnership', 'verify').
-    Leaf commands use their own name (e.g. 'giveaway', 'strike').
+    Checks both globally-registered commands and guild-specific commands so that
+    every current and future command is always discoverable — no list to maintain.
     """
-    names: set[str] = {"all"}
-    for cmd in tree.get_commands(guild=guild):
-        if isinstance(cmd, app_commands.Group):
-            # The permission key for a group is the group name itself
-            names.add(cmd.name)
-        else:
+    names = {"all"}
+    # Global commands (registered without a guild — covers most slash commands)
+    for cmd in tree.get_commands(guild=None):
+        names.add(cmd.name)
+    # Guild-specific commands (if any were synced to this guild)
+    if guild:
+        for cmd in tree.get_commands(guild=guild):
             names.add(cmd.name)
     return sorted(names)
 
