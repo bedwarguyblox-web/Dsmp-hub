@@ -1,6 +1,6 @@
 """
-giveaways.py — /giveaway and /quickdrop commands.
-Reaction-based prize drops with countdown, random winner selection, and winner ping.
+giveaways.py — /giveaway, /quickdrop, /rerollgiveaway commands.
+Button-based entry with live entry count displayed on the button.
 """
 
 import asyncio
@@ -16,10 +16,8 @@ from utils.permissions import is_authorized
 
 logger = logging.getLogger(__name__)
 
-ENTRY_EMOJI = "🎉"
 
-
-def parse_duration(s: str) -> int | None:
+def parse_duration(s: str):
     """Parse '30s', '5m', '2h', '1d' → total seconds. Returns None if invalid."""
     s = s.strip().lower()
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -30,11 +28,56 @@ def parse_duration(s: str) -> int | None:
     return None
 
 
+class GiveawayEntryView(discord.ui.View):
+    """Live-updating entry button for an active giveaway."""
+
+    def __init__(self, prize: str, is_quickdrop: bool):
+        super().__init__(timeout=None)   # we manage lifetime manually
+        self.prize       = prize
+        self.is_quickdrop = is_quickdrop
+        self.entrants: set = set()       # set of user IDs
+        self._lock = asyncio.Lock()
+
+        # Build the initial button
+        self._entry_button = discord.ui.Button(
+            label="🎉 Enter — 0 entries",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"giveaway:enter:{id(self)}",
+        )
+        self._entry_button.callback = self._on_enter
+        self.add_item(self._entry_button)
+
+    async def _on_enter(self, interaction: discord.Interaction):
+        async with self._lock:
+            if interaction.user.id in self.entrants:
+                await interaction.response.send_message(
+                    "✅ You're already entered!", ephemeral=True
+                )
+                return
+            self.entrants.add(interaction.user.id)
+            count = len(self.entrants)
+            self._entry_button.label = f"🎉 Enter — {count} {'entry' if count == 1 else 'entries'}"
+
+        # Edit the message to reflect the new count
+        await interaction.response.edit_message(view=self)
+        logger.info(
+            "Giveaway entry: %s (%d) — total %d",
+            interaction.user, interaction.user.id, count
+        )
+
+    def disable(self):
+        """Disable the button when the giveaway ends."""
+        self._entry_button.disabled = True
+        self._entry_button.style   = discord.ButtonStyle.secondary
+
+
 class GiveawaysCog(commands.Cog, name="Giveaways"):
     """Giveaway and quickdrop commands."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Store final entrant sets keyed by message ID for /rerollgiveaway
+        self._finished: dict = {}   # message_id → list[int] of user IDs
 
     async def _run(
         self,
@@ -72,15 +115,14 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             )
             return
 
-        end_ts    = int(datetime.now(timezone.utc).timestamp()) + seconds
-        kind_tag  = "⚡ QUICKDROP" if is_quickdrop else "🎉 GIVEAWAY"
-        color     = discord.Color.orange() if is_quickdrop else discord.Color.blue()
+        end_ts   = int(datetime.now(timezone.utc).timestamp()) + seconds
+        kind_tag = "⚡ QUICKDROP" if is_quickdrop else "🎉 GIVEAWAY"
+        color    = discord.Color.orange() if is_quickdrop else discord.Color.blue()
 
-        # ── Send the live giveaway embed ──────────────────────────────────────
         embed = discord.Embed(
             title=f"{kind_tag} — {prize}",
             description=(
-                f"React with {ENTRY_EMOJI} to enter!\n\n"
+                f"Click **🎉 Enter** below to join!\n\n"
                 f"**Prize:** {prize}\n"
                 f"**Winners:** {num_winners}\n"
                 f"**Ends:** <t:{end_ts}:R> (<t:{end_ts}:t>)"
@@ -90,8 +132,8 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         )
         embed.set_footer(text=f"Hosted by {interaction.user.display_name} • Ends at")
 
-        msg = await interaction.channel.send(embed=embed)
-        await msg.add_reaction(ENTRY_EMOJI)
+        view = GiveawayEntryView(prize, is_quickdrop)
+        msg  = await interaction.channel.send(embed=embed, view=view)
 
         await interaction.followup.send(
             embed=discord.Embed(
@@ -102,61 +144,54 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         )
 
         logger.info(
-            "%s started by %s in guild %s — prize: %s, duration: %ds, winners: %d",
+            "%s started by %s in %s — prize: %s, duration: %ds, winners: %d",
             kind_tag, interaction.user, interaction.guild.name, prize, seconds, num_winners,
         )
 
-        # ── Wait ──────────────────────────────────────────────────────────────
+        # ── Wait for the giveaway to end ──────────────────────────────────────
         await asyncio.sleep(seconds)
 
-        # ── Fetch updated reactions ───────────────────────────────────────────
-        try:
-            msg = await interaction.channel.fetch_message(msg.id)
-        except discord.NotFound:
-            logger.warning("Giveaway message deleted before it ended.")
-            return
+        # ── Collect entrants from the view ────────────────────────────────────
+        entrant_ids = list(view.entrants)
+        self._finished[msg.id] = entrant_ids   # save for possible reroll
 
-        entrants: list[discord.User] = []
-        for reaction in msg.reactions:
-            if str(reaction.emoji) == ENTRY_EMOJI:
-                async for user in reaction.users():
-                    if not user.bot:
-                        entrants.append(user)
-                break
-
-        # Deduplicate (shouldn't be needed, but safe)
-        seen = set()
-        unique_entrants = []
-        for u in entrants:
-            if u.id not in seen:
-                seen.add(u.id)
-                unique_entrants.append(u)
-        entrants = unique_entrants
+        # Resolve to Member objects (best effort)
+        entrants = []
+        for uid in entrant_ids:
+            m = interaction.guild.get_member(uid)
+            if m and not m.bot:
+                entrants.append(m)
 
         # ── Pick winners ──────────────────────────────────────────────────────
         actual_winners = min(num_winners, len(entrants))
         if entrants:
             winners        = random.sample(entrants, actual_winners)
             winner_mentions = ", ".join(w.mention for w in winners)
-            win_text        = f"🏆 **Winner{'s' if actual_winners > 1 else ''}:** {winner_mentions}"
+            win_text       = f"🏆 **Winner{'s' if actual_winners > 1 else ''}:** {winner_mentions}"
         else:
-            winners         = []
+            winners        = []
             winner_mentions = ""
-            win_text        = "😢 Nobody entered — no winners this time!"
+            win_text       = "😢 Nobody entered — no winners this time!"
 
         # ── Edit original embed to ended state ────────────────────────────────
+        view.disable()
         ended_embed = discord.Embed(
             title=f"{kind_tag} ENDED — {prize}",
             description=(
                 f"**Prize:** {prize}\n"
-                f"**Entries:** {len(entrants)}\n\n"
+                f"**Total Entries:** {len(entrant_ids)}\n\n"
                 f"{win_text}"
             ),
             color=discord.Color.dark_grey(),
             timestamp=datetime.now(timezone.utc),
         )
         ended_embed.set_footer(text=f"Hosted by {interaction.user.display_name} • Ended")
-        await msg.edit(embed=ended_embed)
+
+        try:
+            await msg.edit(embed=ended_embed, view=view)
+        except discord.NotFound:
+            logger.warning("Giveaway message was deleted before it could be updated.")
+            return
 
         # ── Announce winners ──────────────────────────────────────────────────
         if winners:
@@ -172,6 +207,7 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
                     color=discord.Color.gold(),
                     timestamp=datetime.now(timezone.utc),
                 ),
+                allowed_mentions=discord.AllowedMentions(users=True),
             )
         else:
             await interaction.channel.send(
@@ -244,76 +280,63 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             )
             return
 
-        # Validate message ID
         try:
             mid = int(message_id)
         except ValueError:
             await interaction.followup.send(
                 embed=discord.Embed(
                     title="❌ Invalid Message ID",
-                    description="Please provide a valid message ID (right-click the message → Copy Message ID).",
+                    description="Please provide a valid message ID.",
                     color=discord.Color.red(),
                 ),
                 ephemeral=True,
             )
             return
 
-        # Try to fetch the message from the current channel
-        try:
-            msg = await interaction.channel.fetch_message(mid)
-        except discord.NotFound:
+        entrant_ids = self._finished.get(mid)
+        if not entrant_ids:
             await interaction.followup.send(
                 embed=discord.Embed(
-                    title="❌ Message Not Found",
-                    description=f"Could not find message `{mid}` in this channel. Make sure you run this command in the same channel as the giveaway.",
-                    color=discord.Color.red(),
-                ),
-                ephemeral=True,
-            )
-            return
-        except discord.Forbidden:
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="❌ No Access",
-                    description="I don't have permission to read that message.",
-                    color=discord.Color.red(),
+                    title="❌ Not Found",
+                    description=(
+                        f"No entry data found for message `{mid}`.\n"
+                        "Reroll only works for giveaways run in this bot session."
+                    ),
+                    color=discord.Color.orange(),
                 ),
                 ephemeral=True,
             )
             return
 
-        # Collect entrants from 🎉 reaction
-        entrants: list[discord.User] = []
-        for reaction in msg.reactions:
-            if str(reaction.emoji) == ENTRY_EMOJI:
-                async for user in reaction.users():
-                    if not user.bot:
-                        entrants.append(user)
-                break
-
-        # Deduplicate
-        seen: set[int] = set()
-        unique_entrants: list[discord.User] = []
-        for u in entrants:
-            if u.id not in seen:
-                seen.add(u.id)
-                unique_entrants.append(u)
-        entrants = unique_entrants
+        # Resolve members
+        entrants = []
+        for uid in entrant_ids:
+            m = interaction.guild.get_member(uid)
+            if m and not m.bot:
+                entrants.append(m)
 
         if not entrants:
             await interaction.followup.send(
                 embed=discord.Embed(
                     title="😢 No Entrants",
-                    description=f"That message has no {ENTRY_EMOJI} reactions from non-bot users — nobody to reroll from.",
+                    description="No valid entrants found to reroll from.",
                     color=discord.Color.orange(),
-                    timestamp=datetime.now(timezone.utc),
-                )
+                ),
+                ephemeral=True,
             )
             return
 
         actual_winners = min(winners, len(entrants))
         picked         = random.sample(entrants, actual_winners)
         winner_mentions = ", ".join(w.mention for w in picked)
+
+        try:
+            msg = await interaction.channel.fetch_message(mid)
+            jump = msg.jump_url
+        except (discord.NotFound, discord.Forbidden):
+            jump = None
+
+        ref_text = f"*(Rerolled from [this message]({jump}))*" if jump else ""
 
         await interaction.followup.send(
             content=winner_mentions,
@@ -322,15 +345,16 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
                 description=(
                     f"🏆 {winner_mentions}\n\n"
                     f"Congratulations! Please contact {interaction.user.mention} to claim your prize.\n"
-                    f"*(Rerolled from [this message]({msg.jump_url}))*"
+                    f"{ref_text}"
                 ),
                 color=discord.Color.gold(),
                 timestamp=datetime.now(timezone.utc),
             ),
+            allowed_mentions=discord.AllowedMentions(users=True),
         )
 
         logger.info(
-            "Reroll by %s in guild %s: msg=%s, winners=%s",
+            "Reroll by %s in %s: msg=%s, winners=%s",
             interaction.user, interaction.guild.name, mid, [w.id for w in picked],
         )
 

@@ -2,7 +2,9 @@
 scheduler.py — Background task scheduler.
 
 Tasks:
-  1. Weekly strike reset — every Monday at 08:00 UTC+8 (00:00 UTC).
+  1. Bi-weekly strike reset — every other Monday at 08:00 UTC+8 (00:00 UTC).
+     Uses even ISO week numbers so the reset day is consistent regardless of
+     when the bot restarts.
   2. Builder-timer expiry — checks active 48-hour cases every minute and
      fires the owner-review embed when the deadline passes.
 
@@ -23,18 +25,31 @@ logger = logging.getLogger(__name__)
 TZ_UTC8 = timezone(timedelta(hours=8))
 
 
-def _next_monday_reset() -> float:
+def _next_biweekly_monday_reset() -> float:
     """
-    Return the number of seconds until the next Monday 08:00 UTC+8.
+    Return the number of seconds until the next bi-weekly Monday 08:00 UTC+8.
+
+    'Bi-weekly' = every other Monday, chosen by even ISO week numbers.
+    If the current week is already an even week and it is before 08:00 Monday,
+    that Monday is the target.  Otherwise advance week-by-week until we land
+    on an even-week Monday.
     """
     now_utc8 = datetime.now(TZ_UTC8)
-    # weekday(): Monday=0 … Sunday=6
-    days_until_monday = (7 - now_utc8.weekday()) % 7
-    if days_until_monday == 0 and now_utc8.hour >= 8:
-        days_until_monday = 7                 # already past reset today → next week
-    target = now_utc8.replace(hour=8, minute=0, second=0, microsecond=0) \
-             + timedelta(days=days_until_monday)
-    return (target - now_utc8).total_seconds()
+
+    # Start candidate: this Monday at 08:00 (may be in the past)
+    days_to_monday = (7 - now_utc8.weekday()) % 7  # 0 if already Monday
+    candidate = now_utc8.replace(hour=8, minute=0, second=0, microsecond=0) \
+                + timedelta(days=days_to_monday)
+
+    # If we're on Monday but already past 08:00, jump to next Monday
+    if days_to_monday == 0 and now_utc8.hour >= 8:
+        candidate += timedelta(days=7)
+
+    # Advance until we hit an even ISO week number
+    while candidate.isocalendar()[1] % 2 != 0:
+        candidate += timedelta(days=7)
+
+    return (candidate - now_utc8).total_seconds()
 
 
 class BotScheduler:
@@ -44,25 +59,23 @@ class BotScheduler:
 
     def __init__(self):
         self.bot = None
-        self._strike_reset_task: asyncio.Task | None = None
-        self._timer_check_loop: tasks.Loop | None = None
+        self._strike_reset_task = None
+        self._timer_check_loop  = None
 
     def start(self, bot: discord.Client):
         self.bot = bot
-        # Kick off the Monday reset loop
         self._strike_reset_task = asyncio.create_task(self._strike_reset_loop())
-        # Poll active builder timers every 60 seconds
         self._start_timer_check_loop()
         logger.info("Scheduler started.")
 
     # ── Strike reset ────────────────────────────────────────────────────────
 
     async def _strike_reset_loop(self):
-        """Sleep until the next Monday 08:00 UTC+8, reset all strikes, repeat."""
+        """Sleep until the next bi-weekly Monday 08:00 UTC+8, reset strikes, repeat."""
         while True:
-            wait_secs = _next_monday_reset()
+            wait_secs = _next_biweekly_monday_reset()
             logger.info(
-                "Strike reset scheduled in %.0f seconds (%.2f hours)",
+                "Bi-weekly strike reset scheduled in %.0f seconds (%.2f hours)",
                 wait_secs, wait_secs / 3600
             )
             await asyncio.sleep(wait_secs)
@@ -84,7 +97,7 @@ class BotScheduler:
                 ch = guild.get_channel(channel_id)
                 if ch:
                     embed = discord.Embed(
-                        title="⚙️ Weekly Strike Reset",
+                        title="⚙️ Bi-Weekly Strike Reset",
                         description=(
                             f"All strikes have been automatically reset.\n"
                             f"**{count}** user record(s) cleared."
@@ -92,13 +105,13 @@ class BotScheduler:
                         color=discord.Color.blue(),
                         timestamp=datetime.now(timezone.utc),
                     )
-                    embed.set_footer(text="Automated weekly reset — every Monday 08:00 UTC+8")
+                    embed.set_footer(text="Automated bi-weekly reset — every other Monday 08:00 UTC+8")
                     try:
                         await ch.send(embed=embed)
                     except discord.Forbidden:
                         logger.warning("Cannot send to strike logs channel %s", channel_id)
 
-        logger.info("Weekly strike reset complete. %d records cleared.", reset_count)
+        logger.info("Bi-weekly strike reset complete. %d records cleared.", reset_count)
 
     # ── Builder timer expiry ────────────────────────────────────────────────
 
@@ -138,7 +151,7 @@ class BotScheduler:
     async def _fire_owner_review(self, case, cfg: dict):
         """Send the owner-review embed with Approve / Hold / Investigate buttons."""
         from utils.database import update_builder_case_status, log_builder_timer_event
-        from cogs.builder import OwnerReviewView   # imported here to avoid circular deps
+        from cogs.builder import OwnerReviewView
 
         guild = self.bot.get_guild(case["guild_id"])
         if not guild:
@@ -150,7 +163,6 @@ class BotScheduler:
             logger.warning("Owner review channel %s not found", channel_id)
             return
 
-        # Mark as awaiting review so we don't fire again
         update_builder_case_status(case["case_id"], "awaiting_review")
         log_builder_timer_event(case["case_id"], "timer_expired", None, "48h timer expired")
 
@@ -176,7 +188,11 @@ class BotScheduler:
 
         view = OwnerReviewView(case["case_id"], cfg)
         try:
-            await ch.send(content=f"{ping} — A builder timer has expired and requires your review.", embed=embed, view=view)
+            await ch.send(
+                content=f"{ping} — A builder timer has expired and requires your review.",
+                embed=embed,
+                view=view,
+            )
         except discord.Forbidden:
             logger.warning("Cannot send to owner review channel %s", channel_id)
 
