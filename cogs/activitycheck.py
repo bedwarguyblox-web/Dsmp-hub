@@ -235,7 +235,8 @@ class ActivityCheckCog(commands.Cog, name="ActivityCheck"):
 
         view = AttendanceView()
         msg  = await interaction.followup.send(
-            content=ping, embed=embed, view=view
+            content=ping, embed=embed, view=view,
+            allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
         update_activity_check_message(check_id, msg.id)
