@@ -108,6 +108,99 @@ def _build_panel_embed(guild_id: int) -> discord.Embed:
     return embed
 
 
+# ── Panel preview view ────────────────────────────────────────────────────────
+
+class TicketPanelPreviewView(discord.ui.View):
+    """
+    Ephemeral preview shown to the admin before the panel is posted.
+    Row 0 — disabled category buttons (exact preview of what users will see).
+    Row 1 — ✅ Send  |  ❌ Cancel.
+    """
+
+    def __init__(
+        self,
+        target: discord.TextChannel,
+        categories: list[dict],
+        panel_embed: discord.Embed,
+    ):
+        super().__init__(timeout=120)
+        self.target      = target
+        self.categories  = categories
+        self.panel_embed = panel_embed
+
+        # Row 0: greyed-out preview of the live buttons
+        for cat in categories[:5]:
+            emoji_str = cat.get("emoji", "").strip() or None
+            self.add_item(discord.ui.Button(
+                label=cat["label"],
+                emoji=emoji_str,
+                style=discord.ButtonStyle.primary,
+                disabled=True,
+                row=0,
+            ))
+
+        # Row 1: confirm / cancel
+        send_btn = discord.ui.Button(
+            label=f"Send to #{target.name}",
+            style=discord.ButtonStyle.success,
+            emoji="✅",
+            row=1,
+        )
+        cancel_btn = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            emoji="❌",
+            row=1,
+        )
+        send_btn.callback   = self._confirm
+        cancel_btn.callback = self._cancel
+        self.add_item(send_btn)
+        self.add_item(cancel_btn)
+
+    async def _confirm(self, interaction: discord.Interaction):
+        """Post the real panel with live (clickable) buttons."""
+        live_view = discord.ui.View(timeout=None)
+        for cat in self.categories[:5]:
+            emoji_str = cat.get("emoji", "").strip() or None
+            live_view.add_item(discord.ui.Button(
+                label=cat["label"],
+                emoji=emoji_str,
+                style=discord.ButtonStyle.primary,
+                custom_id=f"tkt_open_{cat['label']}",
+                row=0,
+            ))
+        await self.target.send(embed=self.panel_embed, view=live_view)
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.edit_message(
+            embeds=[discord.Embed(
+                title="✅ Panel Sent",
+                description=f"Ticket panel posted in {self.target.mention}.",
+                color=discord.Color.green(),
+            )],
+            view=self,
+        )
+        self.stop()
+
+    async def _cancel(self, interaction: discord.Interaction):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embeds=[discord.Embed(
+                title="❌ Cancelled",
+                description="Panel was not posted.",
+                color=discord.Color.red(),
+            )],
+            view=self,
+        )
+        self.stop()
+
+    async def on_timeout(self):
+        self.stop()
+
+
 # ── Persistent close button ────────────────────────────────────────────────────
 
 class TicketCloseView(discord.ui.View):
@@ -330,7 +423,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
     ticket_group = app_commands.Group(name="ticket", description="Ticket system commands")
 
     # ── /ticket panel ─────────────────────────────────────────────────────────
-    @ticket_group.command(name="panel", description="Post the ticket panel with open buttons")
+    @ticket_group.command(name="panel", description="Preview then post the ticket panel")
     @app_commands.describe(channel="Channel to post the panel in (defaults to current channel)")
     async def panel(
         self,
@@ -348,26 +441,24 @@ class TicketsCog(commands.Cog, name="Tickets"):
         target     = channel or interaction.channel
         guild_id   = interaction.guild.id
         categories = _get_categories(guild_id)
-        embed      = _build_panel_embed(guild_id)
+        panel_embed = _build_panel_embed(guild_id)
 
-        view = discord.ui.View(timeout=None)
-        for cat in categories[:5]:
-            emoji_str = cat.get("emoji", "").strip() or None
-            btn = discord.ui.Button(
-                label=cat["label"],
-                emoji=emoji_str,
-                style=discord.ButtonStyle.primary,
-                custom_id=f"tkt_open_{cat['label']}",
-            )
-            view.add_item(btn)
-
-        await target.send(embed=embed, view=view)
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="✅ Panel Posted",
-                description=f"Ticket panel sent to {target.mention}.",
-                color=discord.Color.green(),
+        preview_header = discord.Embed(
+            title="👁️ Panel Preview",
+            description=(
+                f"**Posting to:** {target.mention}\n"
+                f"**Categories:** {len(categories)} button{'s' if len(categories) != 1 else ''}\n\n"
+                "The buttons below are greyed out — this is exactly how the panel will look.\n"
+                "Click **Send** to post it, or **Cancel** to abort."
             ),
+            color=discord.Color.yellow(),
+        )
+        preview_header.set_footer(text="This preview is only visible to you • expires in 2 minutes")
+
+        view = TicketPanelPreviewView(target, categories, panel_embed)
+        await interaction.followup.send(
+            embeds=[preview_header, panel_embed],
+            view=view,
             ephemeral=True,
         )
 
