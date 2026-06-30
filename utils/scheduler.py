@@ -2,9 +2,8 @@
 scheduler.py — Background task scheduler.
 
 Tasks:
-  1. Bi-weekly strike reset — every other Monday at 08:00 UTC+8 (00:00 UTC).
-     Uses even ISO week numbers so the reset day is consistent regardless of
-     when the bot restarts.
+  1. Weekly strike reset — every Friday at 08:00 UTC+8 (00:00 UTC).
+     Derives next run time from the current wall clock so it survives restarts.
   2. Builder-timer expiry — checks active 48-hour cases every minute and
      fires the owner-review embed when the deadline passes.
 
@@ -25,28 +24,19 @@ logger = logging.getLogger(__name__)
 TZ_UTC8 = timezone(timedelta(hours=8))
 
 
-def _next_biweekly_monday_reset() -> float:
+def _next_weekly_friday_reset() -> float:
     """
-    Return the number of seconds until the next bi-weekly Monday 08:00 UTC+8.
-
-    'Bi-weekly' = every other Monday, chosen by even ISO week numbers.
-    If the current week is already an even week and it is before 08:00 Monday,
-    that Monday is the target.  Otherwise advance week-by-week until we land
-    on an even-week Monday.
+    Return the number of seconds until the next Friday 08:00 UTC+8.
     """
     now_utc8 = datetime.now(TZ_UTC8)
 
-    # Start candidate: this Monday at 08:00 (may be in the past)
-    days_to_monday = (7 - now_utc8.weekday()) % 7  # 0 if already Monday
+    # Friday = weekday 4
+    days_to_friday = (4 - now_utc8.weekday()) % 7  # 0 if already Friday
     candidate = now_utc8.replace(hour=8, minute=0, second=0, microsecond=0) \
-                + timedelta(days=days_to_monday)
+                + timedelta(days=days_to_friday)
 
-    # If we're on Monday but already past 08:00, jump to next Monday
-    if days_to_monday == 0 and now_utc8.hour >= 8:
-        candidate += timedelta(days=7)
-
-    # Advance until we hit an even ISO week number
-    while candidate.isocalendar()[1] % 2 != 0:
+    # If today is Friday but already past 08:00, jump to next Friday
+    if days_to_friday == 0 and now_utc8.replace(hour=8, minute=0, second=0, microsecond=0) <= now_utc8:
         candidate += timedelta(days=7)
 
     return (candidate - now_utc8).total_seconds()
