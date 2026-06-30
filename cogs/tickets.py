@@ -268,8 +268,13 @@ class TicketsCog(commands.Cog, name="Tickets"):
         ticket_id = f"TKT-{uuid.uuid4().hex[:6].upper()}"
         number    = _next_ticket_number(guild.id)
 
-        cat_id_raw = _cfg(guild.id, "category_id")
-        category   = guild.get_channel(int(cat_id_raw)) if cat_id_raw else None
+        # Per-type category takes priority over the global fallback
+        all_cats   = _get_categories(guild.id)
+        type_entry = next((c for c in all_cats if c["label"] == category_label), None)
+        type_cat_id = type_entry.get("category_id") if type_entry else None
+        global_cat_id = _cfg(guild.id, "category_id")
+        resolved_cat_id = type_cat_id or (int(global_cat_id) if global_cat_id else None)
+        category = guild.get_channel(resolved_cat_id) if resolved_cat_id else None
 
         staff_rids = _get_staff_role_ids(guild.id)
         overwrites: dict = {
@@ -651,8 +656,18 @@ class TicketsCog(commands.Cog, name="Tickets"):
 
     # ── /ticket addtype ───────────────────────────────────────────────────────
     @ticket_group.command(name="addtype", description="Add a category button to the ticket panel")
-    @app_commands.describe(label="Button label (e.g. General Support)", emoji="Button emoji (e.g. 🎫, optional)")
-    async def addtype(self, interaction: discord.Interaction, label: str, emoji: str = ""):
+    @app_commands.describe(
+        label="Button label (e.g. Giveaway)",
+        emoji="Button emoji (e.g. 🎁, optional)",
+        category="Discord channel category where these tickets are created (overrides the global default)",
+    )
+    async def addtype(
+        self,
+        interaction: discord.Interaction,
+        label: str,
+        emoji: str = "",
+        category: Optional[discord.CategoryChannel] = None,
+    ):
         await interaction.response.defer(ephemeral=True)
         if not is_authorized(interaction.user, interaction.guild, "ticketpanel"):
             await interaction.followup.send("❌ You must be Admin or above.", ephemeral=True)
@@ -666,13 +681,68 @@ class TicketsCog(commands.Cog, name="Tickets"):
             return
         if cats == DEFAULT_CATEGORIES:
             cats = []
-        cats.append({"label": label, "emoji": emoji.strip()})
+        entry: dict = {"label": label, "emoji": emoji.strip()}
+        if category:
+            entry["category_id"] = category.id
+        cats.append(entry)
         _set_cfg(interaction.guild.id, "categories", json.dumps(cats))
         display = f"{emoji} **{label}**".strip() if emoji.strip() else f"**{label}**"
+        cat_note = f"\nChannel category: **{category.name}**" if category else "\nChannel category: *(uses global default)*"
         await interaction.followup.send(
             embed=discord.Embed(
                 title="✅ Category Added",
-                description=f"{display} added.\nRe-post the panel with `/ticket panel` to update.",
+                description=f"{display} added.{cat_note}\nRe-post the panel with `/ticket panel` to update.",
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
+
+    # ── /ticket edittype ──────────────────────────────────────────────────────
+    @ticket_group.command(name="edittype", description="Edit an existing ticket type's category, emoji, or both")
+    @app_commands.describe(
+        label="Exact label of the type to edit",
+        category="New Discord channel category for this ticket type (leave blank to keep current)",
+        emoji="New button emoji (leave blank to keep current)",
+        clear_category="Remove this type's custom category and use the global default instead",
+    )
+    async def edittype(
+        self,
+        interaction: discord.Interaction,
+        label: str,
+        category: Optional[discord.CategoryChannel] = None,
+        emoji: str = "",
+        clear_category: bool = False,
+    ):
+        await interaction.response.defer(ephemeral=True)
+        if not is_authorized(interaction.user, interaction.guild, "ticketpanel"):
+            await interaction.followup.send("❌ You must be Admin or above.", ephemeral=True)
+            return
+        cats = _get_categories(interaction.guild.id)
+        entry = next((c for c in cats if c["label"].lower() == label.lower()), None)
+        if not entry:
+            await interaction.followup.send(f"❌ No ticket type named **{label}** found. Check `/ticket types`.", ephemeral=True)
+            return
+
+        changes = []
+        if emoji.strip():
+            entry["emoji"] = emoji.strip()
+            changes.append(f"Emoji → {emoji.strip()}")
+        if clear_category:
+            entry.pop("category_id", None)
+            changes.append("Channel category → *(global default)*")
+        elif category:
+            entry["category_id"] = category.id
+            changes.append(f"Channel category → **{category.name}**")
+
+        if not changes:
+            await interaction.followup.send("Nothing to update — provide at least one of: `category`, `emoji`, or `clear_category: True`.", ephemeral=True)
+            return
+
+        _set_cfg(interaction.guild.id, "categories", json.dumps(cats))
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title=f"✅ **{entry['label']}** Updated",
+                description="\n".join(changes),
                 color=discord.Color.green(),
             ),
             ephemeral=True,
@@ -707,20 +777,28 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @ticket_group.command(name="types", description="List all configured ticket categories")
     async def types(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        cats = _get_categories(interaction.guild.id)
+        guild = interaction.guild
+        cats  = _get_categories(guild.id)
+        global_cat_id = _cfg(guild.id, "category_id")
+        global_cat = guild.get_channel(int(global_cat_id)) if global_cat_id else None
         lines = []
         for i, c in enumerate(cats, 1):
-            emoji = c.get("emoji", "").strip()
-            line  = f"`{i}.` {emoji} **{c['label']}**" if emoji else f"`{i}.` **{c['label']}**"
-            lines.append(line)
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="🎫 Ticket Categories",
-                description="\n".join(lines),
-                color=discord.Color.blurple(),
-            ),
-            ephemeral=True,
+            emoji     = c.get("emoji", "").strip()
+            prefix    = f"`{i}.` {emoji}" if emoji else f"`{i}.`"
+            type_cat_id = c.get("category_id")
+            if type_cat_id:
+                ch = guild.get_channel(type_cat_id)
+                cat_str = f"→ **{ch.name}**" if ch else f"→ *(category {type_cat_id} not found)*"
+            else:
+                cat_str = f"→ *(global: {global_cat.name})*" if global_cat else "→ *(no category set)*"
+            lines.append(f"{prefix} **{c['label']}** {cat_str}")
+        embed = discord.Embed(
+            title="🎫 Ticket Types",
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
         )
+        embed.set_footer(text="Use /ticket edittype to change a type's channel category")
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
