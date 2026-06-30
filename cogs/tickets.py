@@ -71,6 +71,34 @@ def _get_staff_role_ids(guild_id: int) -> list[int]:
         return []
 
 
+def _get_mod_role_ids(guild_id: int) -> list[int]:
+    raw = _cfg(guild_id, "mod_roles")
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+def _is_ticket_mod(member: discord.Member, guild_id: int) -> bool:
+    """True if member holds any configured ticket-mod role."""
+    mod_ids = _get_mod_role_ids(guild_id)
+    if not mod_ids:
+        return False
+    member_role_ids = {r.id for r in member.roles}
+    return bool(member_role_ids & set(mod_ids))
+
+
+def _has_staff_role(member: discord.Member, guild_id: int) -> bool:
+    """True if member holds any ticket staff role (used to protect them from removal)."""
+    staff_ids = _get_staff_role_ids(guild_id)
+    if not staff_ids:
+        return False
+    member_role_ids = {r.id for r in member.roles}
+    return bool(member_role_ids & set(staff_ids))
+
+
 def _get_categories(guild_id: int) -> list[dict]:
     raw = _cfg(guild_id, "categories")
     if not raw:
@@ -476,8 +504,10 @@ class TicketsCog(commands.Cog, name="Tickets"):
         if not row:
             await interaction.followup.send("❌ This channel is not an active ticket.", ephemeral=True)
             return
-        if not is_authorized(interaction.user, interaction.guild, "ticketclose") \
-                and interaction.user.id != row["user_id"]:
+        is_admin  = is_authorized(interaction.user, interaction.guild, "ticketclose")
+        is_mod    = _is_ticket_mod(interaction.user, interaction.guild.id)
+        is_opener = interaction.user.id == row["user_id"]
+        if not (is_admin or is_mod or is_opener):
             await interaction.followup.send("❌ You don't have permission to close this ticket.", ephemeral=True)
             return
         await self._do_close(interaction.guild, interaction.channel, row, interaction.user, reason=reason)
@@ -491,8 +521,9 @@ class TicketsCog(commands.Cog, name="Tickets"):
         if not row:
             await interaction.followup.send("❌ This channel is not an active ticket.", ephemeral=True)
             return
-        if not is_authorized(interaction.user, interaction.guild, "ticketclose"):
-            await interaction.followup.send("❌ You must be Admin or above to add users.", ephemeral=True)
+        if not is_authorized(interaction.user, interaction.guild, "ticketclose") \
+                and not _is_ticket_mod(interaction.user, interaction.guild.id):
+            await interaction.followup.send("❌ You don't have permission to add users to tickets.", ephemeral=True)
             return
         try:
             await interaction.channel.set_permissions(
@@ -514,11 +545,20 @@ class TicketsCog(commands.Cog, name="Tickets"):
         if not row:
             await interaction.followup.send("❌ This channel is not an active ticket.", ephemeral=True)
             return
-        if not is_authorized(interaction.user, interaction.guild, "ticketclose"):
-            await interaction.followup.send("❌ You must be Admin or above to remove users.", ephemeral=True)
+        is_admin = is_authorized(interaction.user, interaction.guild, "ticketclose")
+        is_mod   = _is_ticket_mod(interaction.user, interaction.guild.id)
+        if not (is_admin or is_mod):
+            await interaction.followup.send("❌ You don't have permission to remove users from tickets.", ephemeral=True)
             return
         if user.id == row["user_id"]:
             await interaction.followup.send("❌ Cannot remove the ticket owner.", ephemeral=True)
+            return
+        # Mods cannot remove users who hold a staff role
+        if is_mod and not is_admin and _has_staff_role(user, interaction.guild.id):
+            await interaction.followup.send(
+                "❌ You can't remove a staff member from a ticket. Ask an Admin to do that.",
+                ephemeral=True,
+            )
             return
         try:
             await interaction.channel.set_permissions(user, overwrite=None)
@@ -528,6 +568,40 @@ class TicketsCog(commands.Cog, name="Tickets"):
             )
         except discord.Forbidden:
             await interaction.followup.send("❌ I don't have permission to manage this channel.", ephemeral=True)
+
+    # ── /ticket rename ────────────────────────────────────────────────────────
+    @ticket_group.command(name="rename", description="Rename the current ticket channel")
+    @app_commands.describe(name="New channel name (spaces become dashes, max 100 chars)")
+    async def rename(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=True)
+        row = get_ticket_by_channel(interaction.channel.id)
+        if not row:
+            await interaction.followup.send("❌ This channel is not an active ticket.", ephemeral=True)
+            return
+        is_admin = is_authorized(interaction.user, interaction.guild, "ticketclose")
+        is_mod   = _is_ticket_mod(interaction.user, interaction.guild.id)
+        if not (is_admin or is_mod):
+            await interaction.followup.send("❌ You don't have permission to rename ticket channels.", ephemeral=True)
+            return
+        # Sanitise: lowercase, spaces → dashes, strip special chars
+        import re
+        clean = re.sub(r"[^a-z0-9\-]", "", name.lower().strip().replace(" ", "-"))[:100]
+        if not clean:
+            await interaction.followup.send("❌ That name isn't valid. Use letters, numbers, and dashes only.", ephemeral=True)
+            return
+        old_name = interaction.channel.name
+        try:
+            await interaction.channel.edit(name=clean, reason=f"Ticket renamed by {interaction.user}")
+        except discord.Forbidden:
+            await interaction.followup.send("❌ I don't have permission to rename this channel.", ephemeral=True)
+            return
+        await interaction.followup.send(
+            embed=discord.Embed(
+                description=f"✅ Channel renamed from **#{old_name}** → **#{clean}**",
+                color=discord.Color.green(),
+            ),
+            ephemeral=False,
+        )
 
     # ── /ticket list ──────────────────────────────────────────────────────────
     @ticket_group.command(name="list", description="List all open tickets")
@@ -593,6 +667,68 @@ class TicketsCog(commands.Cog, name="Tickets"):
                 description=(
                     f"Ticket staff roles: {', '.join(names)}\n"
                     "New ticket channels will include these roles automatically."
+                ),
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
+
+    # ── /ticket modperms ──────────────────────────────────────────────────────
+    @ticket_group.command(name="modperms", description="Set roles that can use mod-level ticket commands (close, add, remove, rename)")
+    @app_commands.describe(roles="Comma-separated role mentions, names, or IDs — leave blank to clear")
+    async def modperms(self, interaction: discord.Interaction, roles: str = ""):
+        await interaction.response.defer(ephemeral=True)
+        if not is_authorized(interaction.user, interaction.guild, "ticketpanel"):
+            await interaction.followup.send("❌ You must be Admin or above.", ephemeral=True)
+            return
+        guild = interaction.guild
+
+        if not roles.strip():
+            _set_cfg(guild.id, "mod_roles", json.dumps([]))
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="✅ Mod Roles Cleared",
+                    description="No roles have ticket-mod permissions now.",
+                    color=discord.Color.green(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        ids, names = [], []
+        for token in [t.strip() for t in roles.split(",") if t.strip()]:
+            role = None
+            if token.startswith("<@&") and token.endswith(">"):
+                try:
+                    role = guild.get_role(int(token[3:-1]))
+                except ValueError:
+                    pass
+            if role is None:
+                try:
+                    role = guild.get_role(int(token))
+                except ValueError:
+                    pass
+            if role is None:
+                role = discord.utils.find(lambda r, t=token: r.name.lower() == t.lower(), guild.roles)
+            if role:
+                ids.append(role.id)
+                names.append(role.name)
+
+        if not ids:
+            await interaction.followup.send("❌ No valid roles found.", ephemeral=True)
+            return
+
+        _set_cfg(guild.id, "mod_roles", json.dumps(ids))
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="✅ Ticket Mod Roles Set",
+                description=(
+                    f"**Roles:** {', '.join(names)}\n\n"
+                    "These roles can use:\n"
+                    "• `/ticket close` — close a ticket\n"
+                    "• `/ticket add` — add a user\n"
+                    "• `/ticket remove` — remove a user *(cannot remove staff)*\n"
+                    "• `/ticket rename` — rename the channel"
                 ),
                 color=discord.Color.green(),
             ),
