@@ -99,7 +99,7 @@ _Populate as you build — explicit user instructions worth remembering across s
 - Slash commands take up to **1 hour** to appear globally after first sync — this is a Discord limitation
 - `better-sqlite3` requires the `onlyBuiltDependencies` entry in `pnpm-workspace.yaml` to build its native module
 - The bot's PORT=5000 health server and the API server's PORT=8080 must not conflict
-- Weekly strike reset fires every Monday 08:00 UTC+8 — driven by `utils/scheduler.py`
+- Weekly strike reset fires every Monday 08:00 UTC+8 — driven by `utils/scheduler.py` (was incorrectly set to bi-weekly, now fixed to every Monday)
 
 ## Pointers
 

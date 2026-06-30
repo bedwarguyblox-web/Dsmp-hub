@@ -2,7 +2,7 @@
 scheduler.py — Background task scheduler.
 
 Tasks:
-  1. Weekly strike reset — every Friday at 08:00 UTC+8 (00:00 UTC).
+  1. Weekly strike reset — every Monday at 08:00 UTC+8 (00:00 UTC).
      Derives next run time from the current wall clock so it survives restarts.
   2. Builder-timer expiry — checks active 48-hour cases every minute and
      fires the owner-review embed when the deadline passes.
@@ -24,19 +24,19 @@ logger = logging.getLogger(__name__)
 TZ_UTC8 = timezone(timedelta(hours=8))
 
 
-def _next_weekly_friday_reset() -> float:
+def _next_weekly_monday_reset() -> float:
     """
-    Return the number of seconds until the next Friday 08:00 UTC+8.
+    Return the number of seconds until the next Monday 08:00 UTC+8.
     """
     now_utc8 = datetime.now(TZ_UTC8)
 
-    # Friday = weekday 4
-    days_to_friday = (4 - now_utc8.weekday()) % 7  # 0 if already Friday
+    # Monday = weekday 0
+    days_to_monday = (0 - now_utc8.weekday()) % 7  # 0 if already Monday
     candidate = now_utc8.replace(hour=8, minute=0, second=0, microsecond=0) \
-                + timedelta(days=days_to_friday)
+                + timedelta(days=days_to_monday)
 
-    # If today is Friday but already past 08:00, jump to next Friday
-    if days_to_friday == 0 and now_utc8.replace(hour=8, minute=0, second=0, microsecond=0) <= now_utc8:
+    # If today is Monday but already past 08:00, jump to next Monday
+    if days_to_monday == 0 and now_utc8.replace(hour=8, minute=0, second=0, microsecond=0) <= now_utc8:
         candidate += timedelta(days=7)
 
     return (candidate - now_utc8).total_seconds()
@@ -61,11 +61,11 @@ class BotScheduler:
     # ── Strike reset ────────────────────────────────────────────────────────
 
     async def _strike_reset_loop(self):
-        """Sleep until the next bi-weekly Monday 08:00 UTC+8, reset strikes, repeat."""
+        """Sleep until the next Monday 08:00 UTC+8, reset strikes, repeat."""
         while True:
-            wait_secs = _next_biweekly_monday_reset()
+            wait_secs = _next_weekly_monday_reset()
             logger.info(
-                "Bi-weekly strike reset scheduled in %.0f seconds (%.2f hours)",
+                "Weekly strike reset scheduled in %.0f seconds (%.2f hours)",
                 wait_secs, wait_secs / 3600
             )
             await asyncio.sleep(wait_secs)
@@ -87,7 +87,7 @@ class BotScheduler:
                 ch = guild.get_channel(channel_id)
                 if ch:
                     embed = discord.Embed(
-                        title="⚙️ Bi-Weekly Strike Reset",
+                        title="⚙️ Weekly Strike Reset",
                         description=(
                             f"All strikes have been automatically reset.\n"
                             f"**{count}** user record(s) cleared."
@@ -95,7 +95,7 @@ class BotScheduler:
                         color=discord.Color.blue(),
                         timestamp=datetime.now(timezone.utc),
                     )
-                    embed.set_footer(text="Automated bi-weekly reset — every other Monday 08:00 UTC+8")
+                    embed.set_footer(text="Automated weekly reset — every Monday 08:00 UTC+8")
                     try:
                         await ch.send(embed=embed)
                     except discord.Forbidden:
