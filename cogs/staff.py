@@ -26,6 +26,34 @@ class StaffCog(commands.Cog, name="Staff"):
     # ── /staff group ────────────────────────────────────────────────────────
     staff_group = app_commands.Group(name="staff", description="Staff management commands")
 
+    # ── Helper: resolve comma-separated user mentions/IDs to Member objects ──
+    def _resolve_members(self, guild: discord.Guild, users_str: str) -> tuple[list[discord.Member], list[str]]:
+        """
+        Parse a comma-separated string of user mentions or IDs.
+        Returns (found_members, not_found_tokens).
+        """
+        found, missing = [], []
+        for token in [t.strip() for t in users_str.split(",") if t.strip()]:
+            member = None
+            # Try mention format <@ID> or <@!ID>
+            if token.startswith("<@") and token.endswith(">"):
+                raw = token[2:-1].lstrip("!")
+                try:
+                    member = guild.get_member(int(raw))
+                except ValueError:
+                    pass
+            # Try raw ID
+            if member is None:
+                try:
+                    member = guild.get_member(int(token))
+                except ValueError:
+                    pass
+            if member:
+                found.append(member)
+            else:
+                missing.append(token)
+        return found, missing
+
     # ── Helper: resolve comma-separated role names to Role objects ──────────
     def _resolve_roles(self, guild: discord.Guild, roles_str: str) -> tuple[list[discord.Role], list[str]]:
         """
@@ -214,6 +242,124 @@ class StaffCog(commands.Cog, name="Staff"):
         if missing:
             embed.add_field(name="🔍 Not Found", value="\n".join(missing), inline=False)
         embed.set_footer(text="Staff Role Management")
+
+        await interaction.followup.send(embed=embed, ephemeral=False)
+        await self._send_to_logs(guild, embed)
+
+    # ── /staff bulkroles ────────────────────────────────────────────────────
+    @staff_group.command(name="bulkroles", description="Add and/or remove roles from multiple users at once")
+    @app_commands.describe(
+        users="Comma-separated user mentions or IDs",
+        add_roles="Comma-separated roles to ADD (leave blank to skip)",
+        remove_roles="Comma-separated roles to REMOVE (leave blank to skip)",
+    )
+    async def bulkroles(
+        self,
+        interaction: discord.Interaction,
+        users: str,
+        add_roles: str = "",
+        remove_roles: str = "",
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if not is_authorized(interaction.user, interaction.guild, "addroles"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to use this command.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        if not add_roles.strip() and not remove_roles.strip():
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Nothing to do",
+                    description="Provide at least one role in `add_roles` or `remove_roles`.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        guild = interaction.guild
+        members, missing_users = self._resolve_members(guild, users)
+        roles_to_add, missing_add = self._resolve_roles(guild, add_roles) if add_roles.strip() else ([], [])
+        roles_to_remove, missing_remove = self._resolve_roles(guild, remove_roles) if remove_roles.strip() else ([], [])
+
+        if not members:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ No Users Found",
+                    description=f"Could not find any members matching: `{users}`",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        results: list[str] = []
+
+        for member in members:
+            added, skipped_add, removed, skipped_remove, failed = [], [], [], [], []
+
+            for role in roles_to_add:
+                if not can_manage_specific_role(interaction.user, role):
+                    skipped_add.append(f"{role.name} (above your rank)")
+                    continue
+                if role in member.roles:
+                    skipped_add.append(f"{role.name} (already has)")
+                    continue
+                try:
+                    await member.add_roles(role, reason=f"Bulk add by {interaction.user} via /staff bulkroles")
+                    added.append(role.name)
+                    log_staff_action("add_role", interaction.user.id, guild.id, target_id=member.id, details=f"Role: {role.name} (bulk)")
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    failed.append(f"+{role.name} (error)")
+
+            for role in roles_to_remove:
+                if not can_manage_specific_role(interaction.user, role):
+                    skipped_remove.append(f"{role.name} (above your rank)")
+                    continue
+                if role not in member.roles:
+                    skipped_remove.append(f"{role.name} (doesn't have)")
+                    continue
+                try:
+                    await member.remove_roles(role, reason=f"Bulk remove by {interaction.user} via /staff bulkroles")
+                    removed.append(role.name)
+                    log_staff_action("remove_role", interaction.user.id, guild.id, target_id=member.id, details=f"Role: {role.name} (bulk)")
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    failed.append(f"-{role.name} (error)")
+
+            parts = []
+            if added:
+                parts.append(f"✅ Added: {', '.join(added)}")
+            if removed:
+                parts.append(f"🗑️ Removed: {', '.join(removed)}")
+            if skipped_add + skipped_remove:
+                parts.append(f"⚠️ Skipped: {', '.join(skipped_add + skipped_remove)}")
+            if failed:
+                parts.append(f"❌ Failed: {', '.join(failed)}")
+            results.append(f"**{member.display_name}** — " + " | ".join(parts) if parts else f"**{member.display_name}** — no changes")
+
+        embed = discord.Embed(
+            title="📋 Bulk Role Results",
+            description="\n".join(results),
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Performed By", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Users Processed", value=str(len(members)), inline=True)
+        if missing_users:
+            embed.add_field(name="🔍 Users Not Found", value=", ".join(missing_users), inline=False)
+        if missing_add:
+            embed.add_field(name="🔍 Add-Roles Not Found", value=", ".join(missing_add), inline=False)
+        if missing_remove:
+            embed.add_field(name="🔍 Remove-Roles Not Found", value=", ".join(missing_remove), inline=False)
+        embed.set_footer(text="Staff Bulk Role Management")
 
         await interaction.followup.send(embed=embed, ephemeral=False)
         await self._send_to_logs(guild, embed)

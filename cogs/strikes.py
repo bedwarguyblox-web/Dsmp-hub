@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from utils.permissions import is_authorized, CONFIG
 from utils.database import (
     add_strike, remove_strike, get_strike_count,
-    get_strike_history, log_staff_action
+    get_strike_history, log_staff_action, reset_all_strikes
 )
 from cogs.activitycheck import _auto_demote_staff
 
@@ -235,6 +235,44 @@ class StrikesCog(commands.Cog, name="Strikes"):
 
         embed.set_footer(text=f"User ID: {user.id} • Resets every Monday 08:00 UTC+8")
         await interaction.followup.send(embed=embed)
+
+    # ── /clearallstrikes ─────────────────────────────────────────────────────
+    @app_commands.command(name="clearallstrikes", description="Clear all strikes for every user in this server")
+    async def clearallstrikes(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        if not is_authorized(interaction.user, interaction.guild, "clearallstrikes"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to clear all strikes.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        guild = interaction.guild
+        count = reset_all_strikes(guild.id)
+
+        log_staff_action(
+            "strike_reset_manual", interaction.user.id, guild.id,
+            details=f"Manual clear-all | {count} record(s) reset"
+        )
+
+        embed = discord.Embed(
+            title="⚙️ All Strikes Cleared",
+            description=(
+                f"All strikes have been manually reset.\n"
+                f"**{count}** user record(s) cleared."
+            ),
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text=f"Performed by {interaction.user} (ID: {interaction.user.id})")
+        await interaction.followup.send(embed=embed)
+        await self._send_to_logs(guild, embed)
 
     # ── Cooldown error handler ───────────────────────────────────────────────
     @strike.error
