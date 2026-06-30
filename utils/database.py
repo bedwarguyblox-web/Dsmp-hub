@@ -628,13 +628,17 @@ def _ensure_tickets_table(conn):
             user_id       INTEGER NOT NULL,
             guild_id      INTEGER NOT NULL,
             category      TEXT    NOT NULL,
-            status        TEXT    NOT NULL DEFAULT 'intake',
-            answers       TEXT,
-            staff_msg_id  INTEGER,
+            status        TEXT    NOT NULL DEFAULT 'open',
+            channel_id    INTEGER,
             opened_at     TEXT    NOT NULL DEFAULT (datetime('now')),
             closed_at     TEXT
         )
     """)
+    # Migrate old installs: add channel_id if missing
+    try:
+        conn.execute("ALTER TABLE tickets ADD COLUMN channel_id INTEGER")
+    except Exception:
+        pass
 
 
 def open_ticket(ticket_id: str, user_id: int, guild_id: int, category: str) -> bool:
@@ -693,6 +697,16 @@ def close_ticket(ticket_id: str):
             WHERE ticket_id=?
         """, (ticket_id,))
         conn.commit()
+
+
+def get_ticket_by_channel(channel_id: int):
+    """Return the open ticket for a given Discord channel, or None."""
+    with get_connection() as conn:
+        _ensure_tickets_table(conn)
+        return conn.execute(
+            "SELECT * FROM tickets WHERE channel_id=? AND status != 'closed' LIMIT 1",
+            (channel_id,)
+        ).fetchone()
 
 
 def get_all_open_tickets(guild_id: int):
