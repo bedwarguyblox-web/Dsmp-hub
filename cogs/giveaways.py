@@ -1,10 +1,10 @@
 """
-giveaways.py — /giveaway, /quickdrop, /rerollgiveaway commands.
+giveaways.py — /giveaway, /quickdrop, /rerollgiveaway, /giveawayset commands.
 Button-based entry with live entry count displayed on the button.
 
 'ends' parameter accepts:
-  • A duration  — 30s, 5m, 2h, 1d  (ends after that time)
-  • A member goal — "500 members"   (draws as soon as N people enter)
+  • A duration     — 30s, 5m, 2h, 1d   (draws after that time)
+  • A member goal  — "500 members"      (draws when the SERVER reaches 500 members)
 """
 
 import asyncio
@@ -17,19 +17,21 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.permissions import is_authorized
+from utils.database import get_guild_config, set_guild_config
 
 logger = logging.getLogger(__name__)
 
-# Maximum time (seconds) a member-goal giveaway can stay open before auto-ending
-MEMBER_GOAL_MAX_SECONDS = 30 * 24 * 3600   # 30 days
-MEMBER_GOAL_POLL_INTERVAL = 2               # seconds between entry-count checks
+# How often (seconds) to check server member count for member-goal giveaways
+MEMBER_GOAL_POLL_INTERVAL = 10
+# Hard cap: member-goal giveaways expire after 30 days even if goal isn't reached
+MEMBER_GOAL_MAX_SECONDS = 30 * 24 * 3600
 
 
 def parse_ends(s: str):
     """
     Parse the 'ends' field.  Returns one of:
       ('time',    int)  — end after this many seconds
-      ('members', int)  — end when this many members have entered
+      ('members', int)  — end when the SERVER has this many total members
       None              — invalid input
     """
     s = s.strip().lower()
@@ -57,10 +59,10 @@ class GiveawayEntryView(discord.ui.View):
 
     def __init__(self, prize: str, is_quickdrop: bool):
         super().__init__(timeout=None)
-        self.prize        = prize
-        self.is_quickdrop = is_quickdrop
+        self.prize         = prize
+        self.is_quickdrop  = is_quickdrop
         self.entrants: set = set()
-        self._lock = asyncio.Lock()
+        self._lock         = asyncio.Lock()
 
         self._entry_button = discord.ui.Button(
             label="🎉 Enter — 0 entries",
@@ -98,8 +100,16 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
     """Giveaway and quickdrop commands."""
 
     def __init__(self, bot: commands.Bot):
-        self.bot = bot
+        self.bot      = bot
         self._finished: dict = {}   # message_id → list[int] of user IDs
+
+    # ── Config helpers ────────────────────────────────────────────────────────
+    def _ping_role(self, guild: discord.Guild) -> discord.Role | None:
+        """Return the configured giveaway ping role, or None."""
+        raw = get_guild_config(guild.id, "giveaway_ping_role_id")
+        if raw:
+            return guild.get_role(int(raw))
+        return None
 
     # ── Core runner ───────────────────────────────────────────────────────────
     async def _run(
@@ -136,7 +146,7 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
                     title="❌ Invalid 'ends' Value",
                     description=(
                         "Use a **duration** (`30s`, `5m`, `2h`, `1d`) "
-                        "or a **member goal** (`500 members`).\n"
+                        "or a **server member goal** (`500 members`).\n"
                         "Minimum duration: 5 seconds — maximum: 7 days."
                     ),
                     color=discord.Color.red(),
@@ -160,17 +170,22 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
 
         kind_tag = "⚡ QUICKDROP" if is_quickdrop else "🎉 GIVEAWAY"
         color    = discord.Color.orange() if is_quickdrop else discord.Color.blue()
+        guild    = interaction.guild
 
-        # ── Build embed based on mode ─────────────────────────────────────────
+        # ── Build embed ───────────────────────────────────────────────────────
         if end_mode == "time":
-            end_ts = int(datetime.now(timezone.utc).timestamp()) + end_value
-            end_line = f"**Ends:** <t:{end_ts}:R> (<t:{end_ts}:t>)"
-            footer_suffix = "Ends at"
-            embed_ts = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+            end_ts     = int(datetime.now(timezone.utc).timestamp()) + end_value
+            end_line   = f"**Ends:** <t:{end_ts}:R> (<t:{end_ts}:t>)"
+            footer_sfx = "Ends at"
+            embed_ts   = datetime.fromtimestamp(end_ts, tz=timezone.utc)
         else:
-            end_line = f"**Member Goal:** {end_value:,} entries needed to draw"
-            footer_suffix = "Draws at goal"
-            embed_ts = datetime.now(timezone.utc)
+            current    = guild.member_count or 0
+            end_line   = (
+                f"**Member Goal:** {end_value:,} server members\n"
+                f"**Current Members:** {current:,}"
+            )
+            footer_sfx = "Draws at member goal"
+            embed_ts   = datetime.now(timezone.utc)
 
         embed = discord.Embed(
             title=f"{kind_tag} — {prize}",
@@ -183,10 +198,23 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             color=color,
             timestamp=embed_ts,
         )
-        embed.set_footer(text=f"Hosted by {interaction.user.display_name} • {footer_suffix}")
+        embed.set_footer(
+            text=f"Hosted by {interaction.user.display_name} • {footer_sfx}"
+        )
 
-        view = GiveawayEntryView(prize, is_quickdrop)
-        msg  = await interaction.channel.send(embed=embed, view=view)
+        # ── Post giveaway — ping the role if configured ───────────────────────
+        ping_role = self._ping_role(guild)
+        view      = GiveawayEntryView(prize, is_quickdrop)
+
+        if ping_role:
+            msg = await interaction.channel.send(
+                content=ping_role.mention,
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
+        else:
+            msg = await interaction.channel.send(embed=embed, view=view)
 
         await interaction.followup.send(
             embed=discord.Embed(
@@ -201,7 +229,7 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
 
         logger.info(
             "%s started by %s in %s — prize: %s, mode: %s=%s, winners: %d",
-            kind_tag, interaction.user, interaction.guild.name,
+            kind_tag, interaction.user, guild.name,
             prize, end_mode, end_value, num_winners,
         )
 
@@ -209,9 +237,12 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         if end_mode == "time":
             await asyncio.sleep(end_value)
         else:
-            # Poll until member goal is reached (hard cap: 30 days)
+            # Poll server member count until goal is reached (hard cap: 30 days)
             elapsed = 0
-            while len(view.entrants) < end_value and elapsed < MEMBER_GOAL_MAX_SECONDS:
+            while elapsed < MEMBER_GOAL_MAX_SECONDS:
+                current = guild.member_count or 0
+                if current >= end_value:
+                    break
                 await asyncio.sleep(MEMBER_GOAL_POLL_INTERVAL)
                 elapsed += MEMBER_GOAL_POLL_INTERVAL
 
@@ -221,12 +252,12 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
 
         entrants = []
         for uid in entrant_ids:
-            m = interaction.guild.get_member(uid)
+            m = guild.get_member(uid)
             if m and not m.bot:
                 entrants.append(m)
 
         # ── Pick winners ──────────────────────────────────────────────────────
-        actual_winners  = min(num_winners, len(entrants))
+        actual_winners = min(num_winners, len(entrants))
         if entrants:
             winners         = random.sample(entrants, actual_winners)
             winner_mentions = ", ".join(w.mention for w in winners)
@@ -236,19 +267,27 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             winner_mentions = ""
             win_text        = "😢 Nobody entered — no winners this time!"
 
+        # If member-goal mode, show final count in ended embed
+        extra = ""
+        if end_mode == "members":
+            extra = f"**Server Members at Draw:** {guild.member_count:,}\n"
+
         # ── Edit original embed to ended state ────────────────────────────────
         view.disable()
         ended_embed = discord.Embed(
             title=f"{kind_tag} ENDED — {prize}",
             description=(
                 f"**Prize:** {prize}\n"
-                f"**Total Entries:** {len(entrant_ids)}\n\n"
+                f"**Total Entries:** {len(entrant_ids)}\n"
+                f"{extra}\n"
                 f"{win_text}"
             ),
             color=discord.Color.dark_grey(),
             timestamp=datetime.now(timezone.utc),
         )
-        ended_embed.set_footer(text=f"Hosted by {interaction.user.display_name} • Ended")
+        ended_embed.set_footer(
+            text=f"Hosted by {interaction.user.display_name} • Ended"
+        )
 
         try:
             await msg.edit(embed=ended_embed, view=view)
@@ -276,7 +315,10 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             await interaction.channel.send(
                 embed=discord.Embed(
                     title="😢 No Winners",
-                    description=f"Nobody entered the {'quickdrop' if is_quickdrop else 'giveaway'} for **{prize}**.",
+                    description=(
+                        f"Nobody entered the "
+                        f"{'quickdrop' if is_quickdrop else 'giveaway'} for **{prize}**."
+                    ),
                     color=discord.Color.dark_grey(),
                     timestamp=datetime.now(timezone.utc),
                 )
@@ -286,7 +328,7 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
     @app_commands.command(name="giveaway", description="Start a giveaway in this channel")
     @app_commands.describe(
         prize="What you're giving away",
-        ends="Duration (30s, 5m, 2h, 1d) OR member goal (500 members)",
+        ends="Duration (30s, 5m, 2h, 1d) OR server member goal (500 members)",
         winners="Number of winners (1–10, default 1)",
     )
     async def giveaway(
@@ -302,7 +344,7 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
     @app_commands.command(name="quickdrop", description="Start a flash quickdrop in this channel")
     @app_commands.describe(
         prize="What you're dropping",
-        ends="Duration (30s, 5m, 2h) OR member goal (100 members)",
+        ends="Duration (30s, 5m, 2h) OR server member goal (100 members)",
         winners="Number of winners (1–10, default 1)",
     )
     async def quickdrop(
@@ -313,6 +355,82 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         winners: app_commands.Range[int, 1, 10] = 1,
     ):
         await self._run(interaction, prize, ends, winners, is_quickdrop=True)
+
+    # ── /giveawayset ──────────────────────────────────────────────────────────
+    giveawayset = app_commands.Group(
+        name="giveawayset",
+        description="Configure giveaway settings (Admin only)",
+    )
+
+    @giveawayset.command(name="ping", description="Set the role to ping when a giveaway starts")
+    @app_commands.describe(role="Role to mention — leave empty to clear the ping")
+    async def giveawayset_ping(
+        self,
+        interaction: discord.Interaction,
+        role: discord.Role | None = None,
+    ):
+        if not is_authorized(interaction.user, interaction.guild, "giveaway"):
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to configure giveaway settings.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        if role:
+            set_guild_config(interaction.guild.id, "giveaway_ping_role_id", str(role.id))
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Giveaway Ping Set",
+                    description=(
+                        f"{role.mention} will now be pinged whenever a giveaway or quickdrop starts.\n\n"
+                        "**Tip:** Make sure this role has **Allow anyone to @mention this role** "
+                        "enabled, or the bot will need a role above it."
+                    ),
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+        else:
+            set_guild_config(interaction.guild.id, "giveaway_ping_role_id", "")
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Giveaway Ping Cleared",
+                    description="No role will be pinged when giveaways start.",
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+
+    @giveawayset.command(name="status", description="Show current giveaway configuration")
+    async def giveawayset_status(self, interaction: discord.Interaction):
+        if not is_authorized(interaction.user, interaction.guild, "giveaway"):
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        ping_role = self._ping_role(interaction.guild)
+        embed = discord.Embed(
+            title="⚙️ Giveaway Settings",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(
+            name="Ping Role",
+            value=ping_role.mention if ping_role else "*Not set — use `/giveawayset ping`*",
+            inline=False,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /rerollgiveaway ───────────────────────────────────────────────────────
     @app_commands.command(
@@ -393,8 +511,8 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         winner_mentions = ", ".join(w.mention for w in picked)
 
         try:
-            msg  = await interaction.channel.fetch_message(mid)
-            jump = msg.jump_url
+            orig = await interaction.channel.fetch_message(mid)
+            jump = orig.jump_url
         except (discord.NotFound, discord.Forbidden):
             jump = None
 
