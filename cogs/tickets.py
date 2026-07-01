@@ -29,6 +29,7 @@ Staff commands (Admin+):
 """
 
 import asyncio
+import io
 import json
 import logging
 import uuid
@@ -400,6 +401,73 @@ class TicketsCog(commands.Cog, name="Tickets"):
             interaction.user, reason="Closed via button"
         )
 
+    # ── Transcript builder ────────────────────────────────────────────────────
+    async def _build_transcript(
+        self,
+        channel: discord.TextChannel,
+        row,
+        closer: discord.Member,
+        reason: str,
+    ) -> discord.File:
+        """Fetch all messages and return an in-memory .txt transcript file."""
+        lines = [
+            "═" * 60,
+            "  TICKET TRANSCRIPT",
+            "═" * 60,
+            f"  Ticket ID  : {row['ticket_id']}",
+            f"  Category   : {row['category']}",
+            f"  Channel    : #{channel.name}",
+            f"  Opened By  : (ID {row['user_id']})",
+            f"  Closed By  : {closer} (ID {closer.id})",
+            f"  Reason     : {reason}",
+            f"  Opened At  : {str(row['opened_at'])[:16]} UTC",
+            f"  Closed At  : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC",
+            "═" * 60,
+            "",
+        ]
+
+        messages = []
+        try:
+            async for msg in channel.history(limit=None, oldest_first=True):
+                messages.append(msg)
+        except (discord.Forbidden, discord.HTTPException):
+            lines.append("(could not fetch message history)")
+
+        for msg in messages:
+            ts      = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            author  = f"{msg.author} (bot)" if msg.author.bot else str(msg.author)
+            content = msg.content or ""
+
+            # Include embed titles/descriptions as readable text
+            for embed in msg.embeds:
+                parts = []
+                if embed.title:
+                    parts.append(f"[embed title: {embed.title}]")
+                if embed.description:
+                    parts.append(f"[embed: {embed.description[:200]}]")
+                for field in embed.fields:
+                    parts.append(f"  [{field.name}: {field.value[:100]}]")
+                if parts:
+                    content = (content + "\n" + "\n".join(parts)).strip()
+
+            # Attachments
+            for att in msg.attachments:
+                content = (content + f"\n[attachment: {att.filename}]").strip()
+
+            if content:
+                lines.append(f"[{ts}] {author}: {content}")
+
+        lines.append("")
+        lines.append("═" * 60)
+        lines.append("  END OF TRANSCRIPT")
+        lines.append("═" * 60)
+
+        raw = "\n".join(lines).encode("utf-8")
+        return discord.File(
+            io.BytesIO(raw),
+            filename=f"{row['ticket_id']}-transcript.txt",
+        )
+
     # ── Core close logic ──────────────────────────────────────────────────────
     async def _do_close(
         self,
@@ -410,6 +478,10 @@ class TicketsCog(commands.Cog, name="Tickets"):
         reason: str = "No reason given",
     ):
         ticket_id = row["ticket_id"]
+
+        # Build transcript BEFORE closing/deleting the channel
+        transcript = await self._build_transcript(channel, row, closer, reason)
+
         close_ticket(ticket_id)
         log_staff_action("ticket_close", closer.id, guild.id,
                          details=f"{ticket_id} | {reason}")
@@ -429,9 +501,9 @@ class TicketsCog(commands.Cog, name="Tickets"):
                 log_embed.add_field(name="Closed By", value=closer.mention,     inline=True)
                 log_embed.add_field(name="Reason",    value=reason,             inline=False)
                 log_embed.add_field(name="Opened At", value=str(row["opened_at"])[:16], inline=True)
-                log_embed.set_footer(text=f"Channel: #{channel.name}")
+                log_embed.set_footer(text=f"Channel: #{channel.name} • Transcript attached")
                 try:
-                    await logs_ch.send(embed=log_embed)
+                    await logs_ch.send(embed=log_embed, file=transcript)
                 except discord.Forbidden:
                     pass
 
