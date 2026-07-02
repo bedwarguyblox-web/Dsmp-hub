@@ -276,6 +276,12 @@ class TicketsCog(commands.Cog, name="Tickets"):
         if existing:
             ch_id = existing["channel_id"]
             ch = guild.get_channel(ch_id) if ch_id else None
+            # If not in cache (e.g. after a bot restart), try fetching from Discord
+            if ch is None and ch_id:
+                try:
+                    ch = await guild.fetch_channel(ch_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    ch = None
             if ch:
                 await interaction.response.send_message(
                     embed=discord.Embed(
@@ -290,6 +296,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
                 )
                 return
             else:
+                # Channel no longer exists — clean up the stale DB record
                 close_ticket(existing["ticket_id"])
 
         await interaction.response.defer(ephemeral=True)

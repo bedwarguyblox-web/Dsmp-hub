@@ -101,7 +101,7 @@ class BotScheduler:
                     except discord.Forbidden:
                         logger.warning("Cannot send to strike logs channel %s", channel_id)
 
-        logger.info("Bi-weekly strike reset complete. %d records cleared.", reset_count)
+        logger.info("Weekly strike reset complete. %d records cleared.", reset_count)
 
     # ── Builder timer expiry ────────────────────────────────────────────────
 

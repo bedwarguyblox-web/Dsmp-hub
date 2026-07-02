@@ -202,8 +202,12 @@ class VerifyPromptView(discord.ui.View):
         role_id_str  = get_guild_config(gid, "verify_role_id")
         base_role_id = int(role_id_str) if role_id_str else None
 
-        # Already verified?
-        if base_role_id:
+        selectable = _load_selectable(gid)
+
+        # Already verified? Only short-circuit when there is no role picker to show.
+        # If selectable roles are configured, always show the picker so the user
+        # can pick additional roles even after their initial verification.
+        if base_role_id and not selectable:
             base_role = interaction.guild.get_role(base_role_id)
             if base_role and base_role in interaction.user.roles:
                 await interaction.response.send_message(
@@ -215,8 +219,6 @@ class VerifyPromptView(discord.ui.View):
                     ephemeral=True,
                 )
                 return
-
-        selectable = _load_selectable(gid)
 
         if not selectable:
             # No role picker configured — just grant the base verified role
