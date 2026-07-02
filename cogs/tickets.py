@@ -392,11 +392,35 @@ class TicketsCog(commands.Cog, name="Tickets"):
             return
         row = get_ticket_by_channel(interaction.channel.id)
         if not row:
+            # No DB record — channel may have existed before a bot restart/DB reset.
+            # Allow authorized staff to force-delete it if it looks like a ticket channel.
+            ch_name = interaction.channel.name or ""
+            is_staff = is_authorized(interaction.user, interaction.guild, "ticketclose") \
+                       or _is_ticket_mod(interaction.user, interaction.guild.id)
+            if ch_name.startswith("ticket-") and is_staff:
+                await interaction.response.defer()
+                closing = discord.Embed(
+                    title="🔒 Channel Closed",
+                    description=(
+                        f"Closed by {interaction.user.mention}.\n\n"
+                        "This channel will be deleted in **5 seconds**."
+                    ),
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+                try:
+                    await interaction.channel.send(embed=closing)
+                    await asyncio.sleep(5)
+                    await interaction.channel.delete(reason=f"Force-closed by {interaction.user}")
+                except (discord.Forbidden, discord.NotFound):
+                    pass
+                return
             await interaction.response.send_message(
                 "This channel is not an active ticket.", ephemeral=True
             )
             return
         if not is_authorized(interaction.user, interaction.guild, "ticketclose") \
+                and not _is_ticket_mod(interaction.user, interaction.guild.id) \
                 and interaction.user.id != row["user_id"]:
             await interaction.response.send_message(
                 "❌ You don't have permission to close this ticket.", ephemeral=True
@@ -581,6 +605,28 @@ class TicketsCog(commands.Cog, name="Tickets"):
         await interaction.response.defer()
         row = get_ticket_by_channel(interaction.channel.id)
         if not row:
+            # No DB record — allow staff to force-delete orphaned ticket channels
+            ch_name = interaction.channel.name or ""
+            is_admin = is_authorized(interaction.user, interaction.guild, "ticketclose")
+            is_mod   = _is_ticket_mod(interaction.user, interaction.guild.id)
+            if ch_name.startswith("ticket-") and (is_admin or is_mod):
+                closing = discord.Embed(
+                    title="🔒 Channel Closed",
+                    description=(
+                        f"Closed by {interaction.user.mention}.\n"
+                        f"**Reason:** {reason}\n\n"
+                        "This channel will be deleted in **5 seconds**."
+                    ),
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+                try:
+                    await interaction.followup.send(embed=closing)
+                    await asyncio.sleep(5)
+                    await interaction.channel.delete(reason=f"Force-closed by {interaction.user}: {reason}")
+                except (discord.Forbidden, discord.NotFound):
+                    pass
+                return
             await interaction.followup.send("❌ This channel is not an active ticket.", ephemeral=True)
             return
         is_admin  = is_authorized(interaction.user, interaction.guild, "ticketclose")
