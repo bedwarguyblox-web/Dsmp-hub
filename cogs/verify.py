@@ -27,7 +27,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.database import get_guild_config, set_guild_config
-from utils.permissions import is_authorized
+from utils.permissions import is_authorized, CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +37,21 @@ _ROLES_KEY = "verify_roles"   # guild_config key — stores JSON list of {role_i
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _load_selectable(guild_id: int) -> list[dict]:
-    """Return the list of self-assignable role dicts for this guild."""
+    """
+    Return the list of self-assignable role dicts for this guild.
+    Falls back to VERIFY_ROLES in config.json when the DB has nothing set,
+    so the picker works out of the box without needing /verify addrole.
+    """
     raw = get_guild_config(guild_id, _ROLES_KEY)
-    if not raw:
-        return []
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return []
+    if raw:
+        try:
+            roles = json.loads(raw)
+            if roles:
+                return roles
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # Fall back to hardcoded defaults in config.json
+    return list(CONFIG.get("VERIFY_ROLES", []))
 
 
 def _save_selectable(guild_id: int, entries: list[dict]):

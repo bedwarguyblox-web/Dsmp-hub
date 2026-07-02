@@ -16,6 +16,13 @@
   "PARTNERSHIP_MEMBER_ROLE_ID": null,
   "PARTNERSHIP_TICKET_CHANNEL_ID": 1503244589405044886,
   "LOA_ROLE_ID": 1506832744850657321,
+  "VERIFY_ROLES": [
+    {"role_id": 1510816902124146728, "label": "Giveaway Ping"},
+    {"role_id": 1510817164939100280, "label": "Announcement Ping"},
+    {"role_id": 1510817042830463026, "label": "Spawner Restock Ping"},
+    {"role_id": 1506881437746597898, "label": "Price Change Ping"},
+    {"role_id": 1505977452847956028, "label": "Partnership Ping"}
+  ],
   "STAFF_ROLES": {
     "Helper":                   1510810554137182299,
     "Sr Helper":                1510810712711106681,
