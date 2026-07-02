@@ -1,5 +1,5 @@
 """
-giveaways.py — /giveaway, /quickdrop, /rerollgiveaway, /giveawayset commands.
+giveaways.py — /giveaway, /quickdrop, /rerollgiveaway, /giveawaycancel, /giveawayset commands.
 Button-based entry with live entry count displayed on the button.
 
 'ends' parameter accepts:
@@ -21,42 +21,31 @@ from utils.database import get_guild_config, set_guild_config
 
 logger = logging.getLogger(__name__)
 
-# How often (seconds) to check server member count for member-goal giveaways
 MEMBER_GOAL_POLL_INTERVAL = 10
-# Hard cap: member-goal giveaways expire after 30 days even if goal isn't reached
-MEMBER_GOAL_MAX_SECONDS = 30 * 24 * 3600
+MEMBER_GOAL_MAX_SECONDS   = 30 * 24 * 3600
 
 
 def parse_ends(s: str):
     """
-    Parse the 'ends' field.  Returns one of:
-      ('time',    int)  — end after this many seconds
-      ('members', int)  — end when the SERVER has this many total members
-      None              — invalid input
+    Returns ('time', seconds) or ('members', count) or None.
+    'members' mode = draw when the SERVER has that many total members.
     """
     s = s.strip().lower()
-
-    # Member-goal: "500 members" or "500 member"
     for suffix in (" members", " member"):
         if s.endswith(suffix):
             num = s[: -len(suffix)].strip()
             if num.isdigit() and int(num) >= 1:
                 return ("members", int(num))
             return None
-
-    # Time-based
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     if len(s) >= 2 and s[-1] in multipliers and s[:-1].isdigit():
         return ("time", int(s[:-1]) * multipliers[s[-1]])
     if s.isdigit():
         return ("time", int(s))
-
     return None
 
 
 class GiveawayEntryView(discord.ui.View):
-    """Live-updating entry button for an active giveaway."""
-
     def __init__(self, prize: str, is_quickdrop: bool):
         super().__init__(timeout=None)
         self.prize         = prize
@@ -75,21 +64,13 @@ class GiveawayEntryView(discord.ui.View):
     async def _on_enter(self, interaction: discord.Interaction):
         async with self._lock:
             if interaction.user.id in self.entrants:
-                await interaction.response.send_message(
-                    "✅ You're already entered!", ephemeral=True
-                )
+                await interaction.response.send_message("✅ You're already entered!", ephemeral=True)
                 return
             self.entrants.add(interaction.user.id)
             count = len(self.entrants)
-            self._entry_button.label = (
-                f"🎉 Enter — {count} {'entry' if count == 1 else 'entries'}"
-            )
-
+            self._entry_button.label = f"🎉 Enter — {count} {'entry' if count == 1 else 'entries'}"
         await interaction.response.edit_message(view=self)
-        logger.info(
-            "Giveaway entry: %s (%d) — total %d",
-            interaction.user, interaction.user.id, count,
-        )
+        logger.info("Giveaway entry: %s (%d) — total %d", interaction.user, interaction.user.id, count)
 
     def disable(self):
         self._entry_button.disabled = True
@@ -97,19 +78,129 @@ class GiveawayEntryView(discord.ui.View):
 
 
 class GiveawaysCog(commands.Cog, name="Giveaways"):
-    """Giveaway and quickdrop commands."""
-
     def __init__(self, bot: commands.Bot):
-        self.bot      = bot
-        self._finished: dict = {}   # message_id → list[int] of user IDs
+        self.bot       = bot
+        self._finished: dict[int, list[int]] = {}   # msg_id → entrant user IDs
+        self._active:   dict[int, asyncio.Task] = {} # msg_id → running task
 
     # ── Config helpers ────────────────────────────────────────────────────────
     def _ping_role(self, guild: discord.Guild) -> discord.Role | None:
-        """Return the configured giveaway ping role, or None."""
         raw = get_guild_config(guild.id, "giveaway_ping_role_id")
         if raw:
             return guild.get_role(int(raw))
         return None
+
+    # ── Background wait-and-draw task ─────────────────────────────────────────
+    async def _wait_and_draw(
+        self,
+        msg: discord.Message,
+        view: GiveawayEntryView,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+        host: discord.Member,
+        prize: str,
+        end_mode: str,
+        end_value: int,
+        num_winners: int,
+        is_quickdrop: bool,
+        kind_tag: str,
+    ):
+        try:
+            if end_mode == "time":
+                await asyncio.sleep(end_value)
+            else:
+                elapsed = 0
+                while elapsed < MEMBER_GOAL_MAX_SECONDS:
+                    if (guild.member_count or 0) >= end_value:
+                        break
+                    await asyncio.sleep(MEMBER_GOAL_POLL_INTERVAL)
+                    elapsed += MEMBER_GOAL_POLL_INTERVAL
+
+        except asyncio.CancelledError:
+            # ── Cancelled by /giveawaycancel ─────────────────────────────────
+            view.disable()
+            cancelled_embed = discord.Embed(
+                title=f"🚫 {kind_tag} CANCELLED — {prize}",
+                description=(
+                    f"**Prize:** {prize}\n"
+                    f"**Entries at cancellation:** {len(view.entrants)}\n\n"
+                    "This giveaway was cancelled by a staff member. No winner was drawn."
+                ),
+                color=discord.Color.dark_red(),
+                timestamp=datetime.now(timezone.utc),
+            )
+            cancelled_embed.set_footer(text=f"Hosted by {host.display_name} • Cancelled")
+            try:
+                await msg.edit(embed=cancelled_embed, view=view)
+            except discord.NotFound:
+                pass
+            return
+
+        finally:
+            self._active.pop(msg.id, None)
+
+        # ── Normal end: collect entrants and draw ─────────────────────────────
+        entrant_ids = list(view.entrants)
+        self._finished[msg.id] = entrant_ids
+
+        entrants = [m for uid in entrant_ids if (m := guild.get_member(uid)) and not m.bot]
+
+        actual_winners = min(num_winners, len(entrants))
+        if entrants:
+            winners         = random.sample(entrants, actual_winners)
+            winner_mentions = ", ".join(w.mention for w in winners)
+            win_text        = f"🏆 **Winner{'s' if actual_winners > 1 else ''}:** {winner_mentions}"
+        else:
+            winners         = []
+            winner_mentions = ""
+            win_text        = "😢 Nobody entered — no winners this time!"
+
+        extra = f"**Server Members at Draw:** {guild.member_count:,}\n" if end_mode == "members" else ""
+
+        view.disable()
+        ended_embed = discord.Embed(
+            title=f"{kind_tag} ENDED — {prize}",
+            description=(
+                f"**Prize:** {prize}\n"
+                f"**Total Entries:** {len(entrant_ids)}\n"
+                f"{extra}\n"
+                f"{win_text}"
+            ),
+            color=discord.Color.dark_grey(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        ended_embed.set_footer(text=f"Hosted by {host.display_name} • Ended")
+
+        try:
+            await msg.edit(embed=ended_embed, view=view)
+        except discord.NotFound:
+            logger.warning("Giveaway message deleted before update.")
+            return
+
+        if winners:
+            await channel.send(
+                content=winner_mentions,
+                embed=discord.Embed(
+                    title=f"🏆 {'Quickdrop' if is_quickdrop else 'Giveaway'} Winner{'s' if actual_winners > 1 else ''}!",
+                    description=(
+                        f"Congratulations {winner_mentions}!\n"
+                        f"You won **{prize}**!\n\n"
+                        f"Contact {host.mention} to claim your prize."
+                    ),
+                    color=discord.Color.gold(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        else:
+            await channel.send(
+                embed=discord.Embed(
+                    title="😢 No Winners",
+                    description=f"Nobody entered the {'quickdrop' if is_quickdrop else 'giveaway'} for **{prize}**.",
+                    color=discord.Color.dark_grey(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
 
     # ── Core runner ───────────────────────────────────────────────────────────
     async def _run(
@@ -123,15 +214,11 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         await interaction.response.defer(ephemeral=True)
 
         cmd_name = "quickdrop" if is_quickdrop else "giveaway"
-
         if not is_authorized(interaction.user, interaction.guild, cmd_name):
             await interaction.followup.send(
                 embed=discord.Embed(
                     title="❌ Permission Denied",
-                    description=(
-                        f"You must be **Admin** or above (or granted `{cmd_name}` access) "
-                        "to use this command."
-                    ),
+                    description=f"You must be **Admin** or above (or granted `{cmd_name}` access) to use this command.",
                     color=discord.Color.red(),
                     timestamp=datetime.now(timezone.utc),
                 ),
@@ -156,7 +243,6 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             return
 
         end_mode, end_value = parsed
-
         if end_mode == "time" and (end_value < 5 or end_value > 604800):
             await interaction.followup.send(
                 embed=discord.Embed(
@@ -172,20 +258,19 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         color    = discord.Color.orange() if is_quickdrop else discord.Color.blue()
         guild    = interaction.guild
 
-        # ── Build embed ───────────────────────────────────────────────────────
         if end_mode == "time":
-            end_ts     = int(datetime.now(timezone.utc).timestamp()) + end_value
-            end_line   = f"**Ends:** <t:{end_ts}:R> (<t:{end_ts}:t>)"
-            footer_sfx = "Ends at"
-            embed_ts   = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+            end_ts   = int(datetime.now(timezone.utc).timestamp()) + end_value
+            end_line = f"**Ends:** <t:{end_ts}:R> (<t:{end_ts}:t>)"
+            ftr_sfx  = "Ends at"
+            embed_ts = datetime.fromtimestamp(end_ts, tz=timezone.utc)
         else:
-            current    = guild.member_count or 0
-            end_line   = (
+            current  = guild.member_count or 0
+            end_line = (
                 f"**Member Goal:** {end_value:,} server members\n"
                 f"**Current Members:** {current:,}"
             )
-            footer_sfx = "Draws at member goal"
-            embed_ts   = datetime.now(timezone.utc)
+            ftr_sfx  = "Draws at member goal"
+            embed_ts = datetime.now(timezone.utc)
 
         embed = discord.Embed(
             title=f"{kind_tag} — {prize}",
@@ -198,11 +283,8 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             color=color,
             timestamp=embed_ts,
         )
-        embed.set_footer(
-            text=f"Hosted by {interaction.user.display_name} • {footer_sfx}"
-        )
+        embed.set_footer(text=f"Hosted by {interaction.user.display_name} • {ftr_sfx}")
 
-        # ── Post giveaway — ping the role if configured ───────────────────────
         ping_role = self._ping_role(guild)
         view      = GiveawayEntryView(prize, is_quickdrop)
 
@@ -219,8 +301,8 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
         await interaction.followup.send(
             embed=discord.Embed(
                 description=(
-                    f"✅ {'Quickdrop' if is_quickdrop else 'Giveaway'} started in "
-                    f"{interaction.channel.mention}!"
+                    f"✅ {'Quickdrop' if is_quickdrop else 'Giveaway'} started in {interaction.channel.mention}!\n"
+                    f"**Message ID:** `{msg.id}` *(use this with `/giveawaycancel` if needed)*"
                 ),
                 color=discord.Color.green(),
             ),
@@ -229,100 +311,17 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
 
         logger.info(
             "%s started by %s in %s — prize: %s, mode: %s=%s, winners: %d",
-            kind_tag, interaction.user, guild.name,
-            prize, end_mode, end_value, num_winners,
+            kind_tag, interaction.user, guild.name, prize, end_mode, end_value, num_winners,
         )
 
-        # ── Wait for the end condition ─────────────────────────────────────────
-        if end_mode == "time":
-            await asyncio.sleep(end_value)
-        else:
-            # Poll server member count until goal is reached (hard cap: 30 days)
-            elapsed = 0
-            while elapsed < MEMBER_GOAL_MAX_SECONDS:
-                current = guild.member_count or 0
-                if current >= end_value:
-                    break
-                await asyncio.sleep(MEMBER_GOAL_POLL_INTERVAL)
-                elapsed += MEMBER_GOAL_POLL_INTERVAL
-
-        # ── Collect entrants ──────────────────────────────────────────────────
-        entrant_ids = list(view.entrants)
-        self._finished[msg.id] = entrant_ids
-
-        entrants = []
-        for uid in entrant_ids:
-            m = guild.get_member(uid)
-            if m and not m.bot:
-                entrants.append(m)
-
-        # ── Pick winners ──────────────────────────────────────────────────────
-        actual_winners = min(num_winners, len(entrants))
-        if entrants:
-            winners         = random.sample(entrants, actual_winners)
-            winner_mentions = ", ".join(w.mention for w in winners)
-            win_text        = f"🏆 **Winner{'s' if actual_winners > 1 else ''}:** {winner_mentions}"
-        else:
-            winners         = []
-            winner_mentions = ""
-            win_text        = "😢 Nobody entered — no winners this time!"
-
-        # If member-goal mode, show final count in ended embed
-        extra = ""
-        if end_mode == "members":
-            extra = f"**Server Members at Draw:** {guild.member_count:,}\n"
-
-        # ── Edit original embed to ended state ────────────────────────────────
-        view.disable()
-        ended_embed = discord.Embed(
-            title=f"{kind_tag} ENDED — {prize}",
-            description=(
-                f"**Prize:** {prize}\n"
-                f"**Total Entries:** {len(entrant_ids)}\n"
-                f"{extra}\n"
-                f"{win_text}"
-            ),
-            color=discord.Color.dark_grey(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        ended_embed.set_footer(
-            text=f"Hosted by {interaction.user.display_name} • Ended"
-        )
-
-        try:
-            await msg.edit(embed=ended_embed, view=view)
-        except discord.NotFound:
-            logger.warning("Giveaway message was deleted before it could be updated.")
-            return
-
-        # ── Announce winners ──────────────────────────────────────────────────
-        if winners:
-            await interaction.channel.send(
-                content=winner_mentions,
-                embed=discord.Embed(
-                    title=f"🏆 {'Quickdrop' if is_quickdrop else 'Giveaway'} Winner{'s' if actual_winners > 1 else ''}!",
-                    description=(
-                        f"Congratulations {winner_mentions}!\n"
-                        f"You won **{prize}**!\n\n"
-                        f"Contact {interaction.user.mention} to claim your prize."
-                    ),
-                    color=discord.Color.gold(),
-                    timestamp=datetime.now(timezone.utc),
-                ),
-                allowed_mentions=discord.AllowedMentions(users=True),
+        task = asyncio.create_task(
+            self._wait_and_draw(
+                msg, view, guild, interaction.channel,
+                interaction.user, prize,
+                end_mode, end_value, num_winners, is_quickdrop, kind_tag,
             )
-        else:
-            await interaction.channel.send(
-                embed=discord.Embed(
-                    title="😢 No Winners",
-                    description=(
-                        f"Nobody entered the "
-                        f"{'quickdrop' if is_quickdrop else 'giveaway'} for **{prize}**."
-                    ),
-                    color=discord.Color.dark_grey(),
-                    timestamp=datetime.now(timezone.utc),
-                )
-            )
+        )
+        self._active[msg.id] = task
 
     # ── /giveaway ─────────────────────────────────────────────────────────────
     @app_commands.command(name="giveaway", description="Start a giveaway in this channel")
@@ -356,81 +355,69 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
     ):
         await self._run(interaction, prize, ends, winners, is_quickdrop=True)
 
-    # ── /giveawayset ──────────────────────────────────────────────────────────
-    giveawayset = app_commands.Group(
-        name="giveawayset",
-        description="Configure giveaway settings (Admin only)",
-    )
-
-    @giveawayset.command(name="ping", description="Set the role to ping when a giveaway starts")
-    @app_commands.describe(role="Role to mention — leave empty to clear the ping")
-    async def giveawayset_ping(
+    # ── /giveawaycancel ───────────────────────────────────────────────────────
+    @app_commands.command(name="giveawaycancel", description="Cancel an active giveaway without drawing a winner")
+    @app_commands.describe(message_id="Message ID of the active giveaway to cancel")
+    async def giveawaycancel(
         self,
         interaction: discord.Interaction,
-        role: discord.Role | None = None,
+        message_id: str,
     ):
         if not is_authorized(interaction.user, interaction.guild, "giveaway"):
             await interaction.response.send_message(
                 embed=discord.Embed(
                     title="❌ Permission Denied",
-                    description="You must be **Admin** or above to configure giveaway settings.",
+                    description="You must be **Admin** or above (or granted `giveaway` access) to cancel a giveaway.",
                     color=discord.Color.red(),
                 ),
                 ephemeral=True,
             )
             return
 
-        if role:
-            set_guild_config(interaction.guild.id, "giveaway_ping_role_id", str(role.id))
+        try:
+            mid = int(message_id)
+        except ValueError:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="✅ Giveaway Ping Set",
+                    title="❌ Invalid Message ID",
+                    description="Please provide a valid message ID.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        task = self._active.get(mid)
+        if task is None or task.done():
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ No Active Giveaway",
                     description=(
-                        f"{role.mention} will now be pinged whenever a giveaway or quickdrop starts.\n\n"
-                        "**Tip:** Make sure this role has **Allow anyone to @mention this role** "
-                        "enabled, or the bot will need a role above it."
+                        f"No active giveaway found with message ID `{mid}`.\n"
+                        "It may have already ended, been cancelled, or been started before this bot session."
                     ),
-                    color=discord.Color.green(),
-                    timestamp=datetime.now(timezone.utc),
-                ),
-                ephemeral=True,
-            )
-        else:
-            set_guild_config(interaction.guild.id, "giveaway_ping_role_id", "")
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="✅ Giveaway Ping Cleared",
-                    description="No role will be pinged when giveaways start.",
-                    color=discord.Color.green(),
-                    timestamp=datetime.now(timezone.utc),
-                ),
-                ephemeral=True,
-            )
-
-    @giveawayset.command(name="status", description="Show current giveaway configuration")
-    async def giveawayset_status(self, interaction: discord.Interaction):
-        if not is_authorized(interaction.user, interaction.guild, "giveaway"):
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="❌ Permission Denied",
-                    color=discord.Color.red(),
+                    color=discord.Color.orange(),
                 ),
                 ephemeral=True,
             )
             return
 
-        ping_role = self._ping_role(interaction.guild)
-        embed = discord.Embed(
-            title="⚙️ Giveaway Settings",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(timezone.utc),
+        task.cancel()
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🚫 Giveaway Cancelled",
+                description=(
+                    f"The giveaway (`{mid}`) has been cancelled.\n"
+                    "The embed has been updated and no winner will be drawn."
+                ),
+                color=discord.Color.red(),
+                timestamp=datetime.now(timezone.utc),
+            ),
+            ephemeral=True,
         )
-        embed.add_field(
-            name="Ping Role",
-            value=ping_role.mention if ping_role else "*Not set — use `/giveawayset ping`*",
-            inline=False,
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        logger.info("Giveaway %s cancelled by %s in %s", mid, interaction.user, interaction.guild.name)
 
     # ── /rerollgiveaway ───────────────────────────────────────────────────────
     @app_commands.command(
@@ -481,7 +468,7 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
                     title="❌ Not Found",
                     description=(
                         f"No entry data found for message `{mid}`.\n"
-                        "Reroll only works for giveaways run in this bot session."
+                        "Reroll only works for giveaways that ended in this bot session."
                     ),
                     color=discord.Color.orange(),
                 ),
@@ -489,11 +476,7 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             )
             return
 
-        entrants = []
-        for uid in entrant_ids:
-            m = interaction.guild.get_member(uid)
-            if m and not m.bot:
-                entrants.append(m)
+        entrants = [m for uid in entrant_ids if (m := interaction.guild.get_member(uid)) and not m.bot]
 
         if not entrants:
             await interaction.followup.send(
@@ -537,6 +520,80 @@ class GiveawaysCog(commands.Cog, name="Giveaways"):
             "Reroll by %s in %s: msg=%s, winners=%s",
             interaction.user, interaction.guild.name, mid, [w.id for w in picked],
         )
+
+    # ── /giveawayset ──────────────────────────────────────────────────────────
+    giveawayset = app_commands.Group(
+        name="giveawayset",
+        description="Configure giveaway settings (Admin only)",
+    )
+
+    @giveawayset.command(name="ping", description="Set the role to ping when a giveaway starts")
+    @app_commands.describe(role="Role to mention — leave empty to clear the ping")
+    async def giveawayset_ping(
+        self,
+        interaction: discord.Interaction,
+        role: discord.Role | None = None,
+    ):
+        if not is_authorized(interaction.user, interaction.guild, "giveaway"):
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Permission Denied",
+                    description="You must be **Admin** or above to configure giveaway settings.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        if role:
+            set_guild_config(interaction.guild.id, "giveaway_ping_role_id", str(role.id))
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Giveaway Ping Set",
+                    description=(
+                        f"{role.mention} will be pinged whenever a giveaway or quickdrop starts.\n\n"
+                        "**Tip:** Make sure this role has **Allow anyone to @mention this role** enabled."
+                    ),
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+        else:
+            set_guild_config(interaction.guild.id, "giveaway_ping_role_id", "")
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Giveaway Ping Cleared",
+                    description="No role will be pinged when giveaways start.",
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                ephemeral=True,
+            )
+
+    @giveawayset.command(name="status", description="Show current giveaway configuration")
+    async def giveawayset_status(self, interaction: discord.Interaction):
+        if not is_authorized(interaction.user, interaction.guild, "giveaway"):
+            await interaction.response.send_message(
+                embed=discord.Embed(title="❌ Permission Denied", color=discord.Color.red()),
+                ephemeral=True,
+            )
+            return
+
+        ping_role    = self._ping_role(interaction.guild)
+        active_count = sum(1 for t in self._active.values() if not t.done())
+        embed = discord.Embed(
+            title="⚙️ Giveaway Settings",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(
+            name="Ping Role",
+            value=ping_role.mention if ping_role else "*Not set — use `/giveawayset ping`*",
+            inline=False,
+        )
+        embed.add_field(name="Active Giveaways", value=str(active_count), inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
